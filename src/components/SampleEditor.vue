@@ -10,6 +10,9 @@ import {
   deleteSlice,
   duplicateSlice,
   toggleSliceReverse,
+  setSliceDuration,
+  addManualSlice,
+  clearSlices,
   playSlicePreview,
   setTrim,
   applyTrim,
@@ -108,7 +111,7 @@ function draw() {
   const markerText = cssVar('--text-mute') || '#5f5f5f';
   const playheadColor = cssVar('--green') || '#4ade80';
 
-  if (state.sliceMode && state.slices.length) {
+  if (state.sliceMode && !state.manualSlice && state.slices.length) {
     // Arrangement view: draw each slice's waveform in play order.
     ctx.lineWidth = 1;
     sliceLayout.value.forEach((it) => {
@@ -254,6 +257,103 @@ const markerLeft = computed(() => {
   return layout[ins].left * 100;
 });
 
+// ---- Resize a slice's duration (drag its right edge) -----------------------
+const resizeIndex = ref<number | null>(null);
+const resizeLabel = ref('');
+// captured at drag start so the reflow stays stable while dragging
+let rzCumBefore = 0; // total duration of slices before the dragged one
+let rzOtherTotal = 0; // total duration of every OTHER slice
+let rzStartDur = 0;
+let rzStartX = 0;
+let rzStartTotal = 0;
+let rzPushed = false;
+
+function resizeDown(index: number, e: PointerEvent) {
+  e.stopPropagation();
+  const durs = state.slices.map((s) => s.end - s.start);
+  rzStartTotal = durs.reduce((a, b) => a + b, 0) || 1;
+  rzCumBefore = durs.slice(0, index).reduce((a, b) => a + b, 0);
+  rzStartDur = durs[index];
+  rzOtherTotal = rzStartTotal - rzStartDur;
+  rzStartX = e.clientX;
+  rzPushed = false;
+  resizeIndex.value = index;
+  resizeLabel.value = rzStartDur.toFixed(2) + 's';
+  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+}
+
+function resizeMove(e: PointerEvent) {
+  if (resizeIndex.value === null || !wrap.value) return;
+  e.stopPropagation();
+  if (!rzPushed) {
+    pushHistory(); // one undo entry per actual resize gesture
+    rzPushed = true;
+  }
+  const rect = wrap.value.getBoundingClientRect();
+  let dur: number;
+  if (rzOtherTotal <= 0) {
+    // single slice: map pixel delta straight to duration
+    const dx = e.clientX - rzStartX;
+    dur = rzStartDur + (dx * rzStartTotal) / rect.width;
+  } else {
+    // place the dragged right edge exactly under the cursor, accounting for the
+    // live reflow of the other (fixed-duration) tiles
+    const f = Math.min(0.999, Math.max(0.001, (e.clientX - rect.left) / rect.width));
+    dur = (f * rzOtherTotal - rzCumBefore) / (1 - f);
+  }
+  setSliceDuration(resizeIndex.value, dur);
+  const s = state.slices[resizeIndex.value];
+  if (s) resizeLabel.value = (s.end - s.start).toFixed(2) + 's';
+}
+
+function resizeUp(e: PointerEvent) {
+  if (resizeIndex.value === null) return;
+  e.stopPropagation();
+  resizeIndex.value = null;
+}
+
+// ---- Manual slicing: draw a region on the waveform to create a slice -------
+const sliceCss = (i: number) => `var(${sliceVar(i)})`;
+const selecting = ref(false);
+const selStartX = ref(0);
+const selCurX = ref(0);
+const selLeft = computed(() => {
+  const w = wrap.value?.clientWidth || 1;
+  return (Math.min(selStartX.value, selCurX.value) / w) * 100;
+});
+const selWidth = computed(() => {
+  const w = wrap.value?.clientWidth || 1;
+  return (Math.abs(selCurX.value - selStartX.value) / w) * 100;
+});
+function manualDown(e: PointerEvent) {
+  if ((e.target as HTMLElement).closest('[data-action]')) return;
+  if (!wrap.value) return;
+  const rect = wrap.value.getBoundingClientRect();
+  selStartX.value = e.clientX - rect.left;
+  selCurX.value = selStartX.value;
+  selecting.value = true;
+  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+}
+function manualMove(e: PointerEvent) {
+  if (!selecting.value || !wrap.value) return;
+  const rect = wrap.value.getBoundingClientRect();
+  selCurX.value = Math.min(rect.width, Math.max(0, e.clientX - rect.left));
+}
+function manualUp() {
+  if (!selecting.value || !wrap.value) return;
+  selecting.value = false;
+  const w = wrap.value.clientWidth || 1;
+  const a = (selStartX.value / w) * state.duration;
+  const b = (selCurX.value / w) * state.duration;
+  if (Math.abs(selCurX.value - selStartX.value) < 4) {
+    // a click, not a drag → preview whatever slice sits under the cursor
+    const hit = state.slices.find((sl) => a >= sl.start && a < sl.end);
+    if (hit) playSlicePreview(hit.id);
+  } else {
+    addManualSlice(a, b);
+  }
+}
+
 // ---- Trim handles ----------------------------------------------------------
 const trimStartPct = computed(() =>
   state.duration ? (state.trimStart / state.duration) * 100 : 0,
@@ -336,8 +436,22 @@ function knobUp() {
             ✂ Slice
           </button>
           <button class="btn small ghost" @click="setSliceMode(true, 'auto')">Auto</button>
-          <button class="btn small ghost" @click="setSliceMode(true, 'even')">Manual</button>
+          <button
+            class="btn small"
+            :class="{ active: state.manualSlice }"
+            :style="state.manualSlice ? 'background:var(--cyan);border-color:var(--cyan)' : ''"
+            @click="setSliceMode(true, 'manual')"
+          >
+            Manual
+          </button>
           <button class="btn small ghost" @click="setSliceMode(true, 'random')">Random</button>
+          <button
+            v-if="state.manualSlice && state.slices.length"
+            class="btn small ghost"
+            @click="clearSlices()"
+          >
+            Clear
+          </button>
         </div>
       </div>
     </div>
@@ -349,37 +463,96 @@ function knobUp() {
     >
       <canvas ref="canvas" />
 
-      <!-- draggable slice overlay -->
-      <div v-if="state.sliceMode && state.slices.length" class="slice-overlay">
+      <!-- draggable slice overlay (arrangement view) -->
+      <div
+        v-if="state.sliceMode && !state.manualSlice && state.slices.length"
+        class="slice-overlay"
+      >
         <div
           v-for="it in sliceLayout"
           :key="it.slice.id"
           class="slice-tile"
           :data-sid="it.slice.id"
-          :class="{ dragging: dragIndex === it.index, rev: it.slice.reversed }"
+          :class="{
+            dragging: dragIndex === it.index,
+            resizing: resizeIndex === it.index,
+            rev: it.slice.reversed,
+          }"
           :style="{
             left: it.left * 100 + '%',
             width: it.width * 100 + '%',
             borderColor: it.color,
             transform: dragIndex === it.index ? `translateX(${dragDelta}px)` : '',
-            zIndex: dragIndex === it.index ? 5 : 1,
+            zIndex: dragIndex === it.index || resizeIndex === it.index ? 5 : 1,
           }"
           @pointerdown="tileDown($event, it.index)"
           @pointermove="tileMove"
           @pointerup="tileUp(it.index)"
         >
           <span class="tile-badge mono" :style="{ background: it.color }">{{ it.index + 1 }}</span>
+          <span
+            v-if="resizeIndex === it.index"
+            class="tile-len mono"
+            :style="{ background: it.color }"
+            >{{ resizeLabel }}</span
+          >
           <div class="tile-actions">
             <button data-action title="Reverse" @click="toggleSliceReverse(it.slice.id)">⇋</button>
             <button data-action title="Duplicate" @click="duplicateSlice(it.slice.id)">⧉</button>
             <button data-action class="del" title="Delete" @click="deleteSlice(it.slice.id)">✕</button>
           </div>
+          <span
+            class="slice-resize"
+            data-action
+            title="Drag to change length"
+            :style="{ background: it.color }"
+            @pointerdown="resizeDown(it.index, $event)"
+            @pointermove="resizeMove"
+            @pointerup="resizeUp"
+          />
         </div>
 
         <div
           v-if="markerLeft !== null && dragIndex !== null"
           class="drop-marker"
           :style="{ left: markerLeft + '%' }"
+        />
+      </div>
+
+      <!-- manual slicing: draw a region on the continuous waveform -->
+      <div
+        v-if="state.sliceMode && state.manualSlice"
+        class="manual-overlay"
+        @pointerdown="manualDown"
+        @pointermove="manualMove"
+        @pointerup="manualUp"
+      >
+        <div
+          v-for="(s, i) in state.slices"
+          :key="s.id"
+          class="manual-region"
+          :style="{
+            left: (s.start / state.duration) * 100 + '%',
+            width: ((s.end - s.start) / state.duration) * 100 + '%',
+            borderColor: sliceCss(i),
+            background: `color-mix(in srgb, ${sliceCss(i)} 16%, transparent)`,
+          }"
+        >
+          <span class="mr-badge mono" :style="{ background: sliceCss(i) }">{{ i + 1 }}</span>
+          <button
+            class="mr-del"
+            data-action
+            title="Delete slice"
+            @pointerdown.stop
+            @click="deleteSlice(s.id)"
+          >
+            ✕
+          </button>
+        </div>
+        <div
+          v-if="selecting"
+          class="manual-sel"
+          :style="{ left: selLeft + '%', width: selWidth + '%' }"
         />
       </div>
 
@@ -467,7 +640,11 @@ function knobUp() {
       <div v-if="state.sliceMode" class="ctl slices-info">
         <span class="label">{{ state.slices.length }} slices</span>
         <div class="ctl-body">
-          <span class="drag-hint dim mono">drag tiles to rearrange · click to preview</span>
+          <span class="drag-hint dim mono">{{
+            state.manualSlice
+              ? 'drag on the waveform to slice · click a region to preview'
+              : 'drag tiles to rearrange · drag edge to resize · click to preview'
+          }}</span>
         </div>
       </div>
     </div>
@@ -514,6 +691,69 @@ function knobUp() {
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   overflow: hidden;
+}
+/* manual slicing: draw regions on the continuous waveform */
+.manual-overlay {
+  position: absolute;
+  inset: 0;
+  cursor: crosshair;
+  touch-action: none;
+}
+.manual-region {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 2px solid transparent;
+  border-right: 2px solid transparent;
+  pointer-events: none;
+}
+.mr-badge {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 4px;
+  color: var(--on-hue);
+  font-size: 9px;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+.mr-del {
+  position: absolute;
+  bottom: 4px;
+  left: 4px;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+  font-size: 10px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  pointer-events: auto;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.manual-region:hover .mr-del {
+  opacity: 1;
+}
+.mr-del:hover {
+  color: var(--red);
+  border-color: var(--red);
+}
+.manual-sel {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border-left: 2px solid var(--accent);
+  border-right: 2px solid var(--accent);
+  pointer-events: none;
 }
 /* trim handles + dimmed excluded regions */
 .trim-overlay {
@@ -621,6 +861,41 @@ function knobUp() {
   display: grid;
   place-items: center;
   pointer-events: none;
+}
+/* right-edge grip to drag a slice's length */
+.slice-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -3px;
+  width: 8px;
+  cursor: ew-resize;
+  opacity: 0;
+  border-radius: 3px;
+  transition: opacity 0.12s;
+  touch-action: none;
+  z-index: 4;
+}
+.slice-tile:hover .slice-resize {
+  opacity: 0.6;
+}
+.slice-resize:hover,
+.slice-tile.resizing .slice-resize {
+  opacity: 1;
+}
+/* live length read-out while dragging the edge */
+.tile-len {
+  position: absolute;
+  top: 22px;
+  left: 4px;
+  padding: 1px 6px;
+  border-radius: 100px;
+  color: var(--on-hue);
+  font-size: 9px;
+  font-weight: 700;
+  pointer-events: none;
+  white-space: nowrap;
+  z-index: 6;
 }
 .tile-actions {
   position: absolute;
@@ -771,8 +1046,15 @@ function knobUp() {
     height: auto;
     min-height: 44px;
   }
-  /* no hover on touch — keep the per-slice actions visible */
+  /* no hover on touch — keep the per-slice actions + resize grip visible */
   .tile-actions {
+    opacity: 1;
+  }
+  .slice-resize {
+    opacity: 0.7;
+    width: 12px;
+  }
+  .mr-del {
     opacity: 1;
   }
 }

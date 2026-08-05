@@ -50,6 +50,7 @@ interface State {
   slices: Slice[];
   sampleGrid: boolean[][]; // sample step sequencer: [sliceIndex][step] on/off
   sliceMode: boolean;
+  manualSlice: boolean; // draw-your-own-region slicing mode
   trimStart: number; // seconds — start of the active/selection region
   trimEnd: number; // seconds — end of the active/selection region
   trimmed: boolean; // has the buffer been cropped from the original?
@@ -102,6 +103,7 @@ export const state = reactive<State>({
   slices: [],
   sampleGrid: [],
   sliceMode: false,
+  manualSlice: false,
   trimStart: 0,
   trimEnd: 0,
   trimmed: false,
@@ -540,6 +542,15 @@ export function toggleSliceReverse(id: string) {
   s.reversed = !s.reversed;
 }
 
+/** Set a slice's playback length by moving its end (start stays fixed). Clamped
+ *  to [0.02s, end-of-buffer]. History is managed by the caller (once per drag). */
+export function setSliceDuration(index: number, dur: number) {
+  const s = state.slices[index];
+  if (!s) return;
+  const maxDur = state.duration - s.start;
+  s.end = s.start + Math.max(0.02, Math.min(dur, maxDur));
+}
+
 /** Audition a single slice (click-to-preview in the editor). */
 export function playSlicePreview(id: string) {
   initAudio();
@@ -549,19 +560,55 @@ export function playSlicePreview(id: string) {
   if (s && samplePlayer) samplePlayer.playSlice(s, ctx.currentTime + 0.01);
 }
 
-export function setSliceMode(on: boolean, kind: 'auto' | 'random' | 'even' = 'auto') {
+export function setSliceMode(on: boolean, kind: 'auto' | 'random' | 'manual' = 'auto') {
   state.sliceMode = on;
-  if (!on) return;
+  if (!on) {
+    state.manualSlice = false;
+    return;
+  }
+  if (kind === 'manual') {
+    // draw-your-own-region mode: keep any existing slices, let the user paint more
+    state.manualSlice = true;
+    return;
+  }
+  state.manualSlice = false;
   pushHistory();
   const trans = (state as any)._transients || [];
   if (kind === 'auto') state.slices = makeSlices(trans, state.duration);
-  else if (kind === 'even') state.slices = evenSlices(state.duration, 16);
   else {
     // random glitch chops
     const n = 8 + Math.floor(Math.random() * 12);
     state.slices = evenSlices(state.duration, n).sort(() => Math.random() - 0.5);
   }
   distributeSlices();
+}
+
+/** Manual slicing: add a slice for a hand-drawn [start, end] buffer region. */
+export function addManualSlice(start: number, end: number) {
+  const dur = state.duration;
+  const s = Math.max(0, Math.min(start, end));
+  const e = Math.min(dur, Math.max(start, end));
+  if (e - s < 0.02) return;
+  pushHistory();
+  const slice = { id: nextSliceId(), start: s, end: e, pitch: 0, reversed: false, gain: 1 };
+  state.slices.push(slice);
+  const idx = state.slices.length - 1;
+  const row = new Array(state.totalSteps).fill(false);
+  row[(idx * 4) % state.totalSteps] = true; // drop it on a beat so it's audible
+  state.sampleGrid.push(row);
+  // audition the new chop immediately
+  if (samplePlayer) {
+    const ctx = engine.ensure();
+    if (ctx.state === 'suspended') ctx.resume();
+    samplePlayer.playSlice(slice, ctx.currentTime + 0.01);
+  }
+}
+
+/** Remove every slice (and its sequencer rows). */
+export function clearSlices() {
+  pushHistory();
+  state.slices = [];
+  state.sampleGrid = [];
 }
 
 export function toggleStep(trackId: string, i: number, recordHistory = true) {
