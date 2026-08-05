@@ -1,0 +1,301 @@
+/* Doto — open dot-matrix face (OFL), self-hosted. Shared with polygen-tracker;
+   used for the wordmark and every numeric read-out (the dot-matrix display). */
+@font-face {
+  font-family: 'Doto';
+  font-style: normal;
+  font-weight: 400 800;
+  font-display: swap;
+  src: url('/fonts/doto.woff2') format('woff2');
+}
+
+:root {
+  /* Theme-independent geometry + type (aligned to the polygen / triplette.it
+     design system). Colors live in the [data-theme] blocks below. */
+  --radius: 14px;
+  --radius-sm: 8px;
+  --radius-lg: 20px;
+  --radius-pill: 999px;
+  --dot-size: 22px;
+
+  --mono: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', 'SF Mono', Menlo,
+    Consolas, 'JetBrains Mono', monospace;
+  --sans: 'Inter', system-ui, 'Segoe UI', Roboto, sans-serif;
+  --display: 'Doto', var(--mono);
+
+  --on-accent: #ffffff; /* red is dark enough that white reads in both themes */
+}
+
+/* ===== DARK (default) ================================================== */
+:root,
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #000000; /* pure black ground */
+  --panel: #0c0c0c; /* surface cards */
+  --panel-2: #141414; /* raised / interactive surface */
+  --panel-3: #1e1e1e; /* hover / active surface */
+  --well: #0a0a0a; /* recessed screens: waveform, piano grid, meters */
+  --line: #232323; /* the hairline that defines every card */
+  --line-strong: #383838;
+
+  --text: #f4f4f4;
+  --text-bright: #ffffff;
+  --text-dim: #9a9a9a;
+  --text-mute: #7d7d7d;
+  --text-ghost: #4c4c4c;
+
+  --accent: #ff2b32; /* red — action / play / live / selection */
+  --accent-soft: rgba(255, 43, 50, 0.14);
+  --accent-strong: rgba(255, 43, 50, 0.24);
+  --accent-glow: rgba(255, 43, 50, 0.5);
+
+  /* per-channel / functional identity hues */
+  --cyan: #4ecbe0; /* sample */
+  --orange: #f0934d; /* drums */
+  --purple: #b98ce0; /* effects */
+  --green: #5dd97c; /* playback / bass */
+  --red: var(--accent);
+
+  /* slice palette — vivid on black; darkened counterparts in the light block */
+  --slice-1: #4ecbe0;
+  --slice-2: #f0934d;
+  --slice-3: #b98ce0;
+  --slice-4: #5dd97c;
+  --slice-5: #ffd93d;
+  --slice-6: #ff6b6b;
+
+  --on-hue: #0a0a0a; /* text on a light identity-hue fill */
+  --hover: rgba(255, 255, 255, 0.06); /* neutral hover overlay */
+  --dot: rgba(244, 244, 244, 0.05);
+}
+
+/* ===== LIGHT =========================================================== */
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --bg: #ffffff;
+  --panel: #ffffff;
+  --panel-2: #f2f2f2;
+  --panel-3: #e6e6e6;
+  --well: #f4f4f4;
+  --line: #e2e2e2;
+  --line-strong: #cfcfcf;
+
+  --text: #0a0a0a;
+  --text-bright: #000000;
+  --text-dim: #616161;
+  --text-mute: #767676;
+  --text-ghost: #c4c4c4;
+
+  --accent: #d71921;
+  --accent-soft: rgba(215, 25, 33, 0.1);
+  --accent-strong: rgba(215, 25, 33, 0.18);
+  --accent-glow: rgba(215, 25, 33, 0.34);
+
+  /* identity hues darkened so they read as text/lines on white */
+  --cyan: #0e8aa8;
+  --orange: #c05f16;
+  --purple: #7d3fb5;
+  --green: #1a9c4a;
+  --red: var(--accent);
+
+  /* slice palette — darkened so slice waveforms read on white */
+  --slice-1: #0e8aa8;
+  --slice-2: #c05f16;
+  --slice-3: #7d3fb5;
+  --slice-4: #1a9c4a;
+  --slice-5: #b8860b;
+  --slice-6: #d1453b;
+
+  --on-hue: #ffffff; /* text on a darkened identity-hue fill */
+  --hover: rgba(0, 0, 0, 0.05);
+  --dot: rgba(10, 10, 10, 0.05);
+}
+
+* {
+  box-sizing: border-box;
+}
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+body {
+  /* the faint dot-matrix void, showing through the gaps between cards */
+  background-color: var(--bg);
+  background-image: radial-gradient(var(--dot) 1px, transparent 1px);
+  background-size: var(--dot-size) var(--dot-size);
+  background-position: -1px -1px;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* Dot-matrix display type — the real Doto face, a single decorative nod to the
+   dot-matrix display. Use on the wordmark and numeric read-outs. */
+.dot-matrix {
+  font-family: var(--display);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+button {
+  font-family: inherit;
+  color: var(--text);
+  cursor: pointer;
+  border: none;
+  background: none;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.mono {
+  font-family: var(--mono);
+  letter-spacing: 0.5px;
+}
+.dim {
+  color: var(--text-dim);
+}
+.label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1.4px;
+  color: var(--text-mute);
+  font-weight: 600;
+}
+
+/* generic button — pill-shaped, monospace, outline-first (triplette style) */
+.btn {
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  padding: 7px 14px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.6px;
+  font-weight: 500;
+  color: var(--text);
+  transition: all 0.13s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+.btn:hover {
+  background: var(--panel-2);
+  border-color: var(--line-strong);
+}
+.btn:active {
+  background: var(--panel-3);
+}
+.btn.active {
+  color: var(--on-hue);
+}
+.btn.ghost {
+  background: transparent;
+}
+.btn.small {
+  padding: 5px 10px;
+  font-size: 10.5px;
+}
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+/* primary action: red outline that fills on hover */
+.btn.primary {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+.btn.primary:hover {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 100px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  font-size: 11px;
+}
+
+select.select {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  font-size: 12px;
+  font-family: var(--mono);
+  outline: none;
+}
+select.select:focus {
+  border-color: #555;
+}
+
+input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+input[type='range']::-webkit-slider-runnable-track {
+  height: 4px;
+  background: #3a3a3a;
+  border-radius: 3px;
+}
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  height: 14px;
+  width: 14px;
+  border-radius: 50%;
+  background: var(--text);
+  margin-top: -5px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+@keyframes pop {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.35);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes fadein {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
