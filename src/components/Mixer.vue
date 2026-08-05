@@ -174,4 +174,21 @@ import {
   background: var(--green);
   color: var(--on-hue);
 }
+
+@media (max-width: 820px) {
+  /* four strips shrink to share the width instead of overflowing */
+  .strips {
+    gap: 6px;
+    justify-content: space-between;
+  }
+  .strip {
+    max-width: none;
+    min-width: 0;
+    padding: 10px 4px;
+  }
+  .ms-btn {
+    width: 24px;
+    height: 26px;
+  }
+}
 </style>

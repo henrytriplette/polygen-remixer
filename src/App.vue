@@ -281,4 +281,51 @@ onUnmounted(() => {
   opacity: 0;
   transform: translateX(-50%) translateY(10px);
 }
+
+/* ---- Mobile: scrolling, single-column layout with a pinned transport ---- */
+@media (max-width: 820px) {
+  .app {
+    height: auto;
+    min-height: 100dvh;
+    padding: 6px;
+    gap: 6px;
+  }
+  .tabs {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  /* the decorative bar-tick timeline is noise on a phone */
+  .timeline {
+    display: none;
+  }
+  .stage {
+    flex-direction: column;
+    min-height: 0;
+  }
+  .main {
+    overflow: visible;
+  }
+  /* natural heights instead of viewport-proportional flex */
+  .hero {
+    flex: none;
+    min-height: 260px;
+  }
+  .workspace {
+    flex: none;
+    min-height: 340px;
+  }
+  .workspace > section {
+    flex: none;
+  }
+  /* keep play/stop reachable while the page scrolls */
+  .transport {
+    position: sticky;
+    bottom: 6px;
+    z-index: 40;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  }
+  .toast {
+    bottom: 88px;
+  }
+}
 </style>

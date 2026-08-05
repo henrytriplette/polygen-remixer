@@ -53,7 +53,10 @@ const waves = ['sawtooth', 'square', 'sine', 'triangle'];
           <span v-if="m % 12 === 0" class="key-label mono">{{ midiToName(m) }}</span>
         </div>
       </div>
-      <div class="cells" :style="{ gridTemplateColumns: `repeat(${state.totalSteps}, 1fr)` }">
+      <div
+        class="cells"
+        :style="{ gridTemplateColumns: `repeat(${state.totalSteps}, var(--cell-w, 1fr))` }"
+      >
         <template v-for="m in rows" :key="m">
           <div
             v-for="s in state.totalSteps"
@@ -183,5 +186,26 @@ const waves = ['sawtooth', 'square', 'sine', 'triangle'];
   color: var(--on-hue);
   font-weight: 700;
   font-family: var(--mono);
+}
+
+@media (max-width: 820px) {
+  /* horizontal scroll with a pinned key column and wider, tappable cells */
+  .roll-grid {
+    display: flex;
+    overflow-x: auto;
+    overflow-y: hidden;
+    min-height: 320px;
+  }
+  .keys {
+    position: sticky;
+    left: 0;
+    z-index: 3;
+    flex: 0 0 46px;
+    background: var(--panel);
+  }
+  .cells {
+    --cell-w: 30px;
+    flex: 0 0 auto;
+  }
 }
 </style>

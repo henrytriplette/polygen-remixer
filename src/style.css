@@ -134,6 +134,22 @@ body {
   overflow: hidden;
 }
 
+/* On phones / small tablets the desktop "fills the viewport, never scrolls"
+   model is dropped: the page scrolls vertically and the transport pins. */
+@media (max-width: 820px) {
+  html,
+  body,
+  #app {
+    height: auto;
+    min-height: 100%;
+  }
+  body {
+    overflow-x: hidden;
+    overflow-y: auto;
+    -webkit-text-size-adjust: 100%;
+  }
+}
+
 /* Dot-matrix display type — the real Doto face, a single decorative nod to the
    dot-matrix display. Use on the wordmark and numeric read-outs. */
 .dot-matrix {

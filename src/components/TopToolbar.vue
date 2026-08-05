@@ -246,4 +246,35 @@ function onDrop(e: DragEvent) {
   height: 30px;
   background: var(--line);
 }
+
+@media (max-width: 820px) {
+  .toolbar {
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 10px 12px;
+  }
+  /* row 1: brand.  row 2: upload (full width).  row 3: controls (wrap). */
+  .brand {
+    order: 1;
+  }
+  .drop {
+    order: 3;
+    flex-basis: 100%;
+    min-width: 0;
+  }
+  .controls {
+    order: 2;
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 8px 10px;
+    justify-content: flex-start;
+  }
+  .controls .divider {
+    display: none;
+  }
+  /* let the action buttons breathe / stay tappable */
+  .controls .btn {
+    padding: 8px 12px;
+  }
+}
 </style>

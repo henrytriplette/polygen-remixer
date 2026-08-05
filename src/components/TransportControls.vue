@@ -178,4 +178,34 @@ import { state, togglePlay, stop, setLoop, toggleMetronome } from '../store';
   letter-spacing: 1.5px;
   text-transform: uppercase;
 }
+
+@media (max-width: 820px) {
+  .transport {
+    padding: 8px 10px;
+    gap: 8px;
+  }
+  .hint {
+    display: none;
+  }
+  .disp-label {
+    display: none;
+  }
+  .pos {
+    font-size: 20px;
+  }
+  .bpm-num {
+    font-size: 18px;
+  }
+  .center {
+    gap: 6px;
+  }
+  .tbtn {
+    width: 40px;
+    height: 40px;
+  }
+  .tbtn.play {
+    width: 52px;
+    height: 42px;
+  }
+}
 </style>
