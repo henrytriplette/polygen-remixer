@@ -12,6 +12,8 @@ keyboard-accessible interactions.
 3. Chop deletion
 4. Configurable automatic chop count
 5. Dynamic performance pads for all chops
+6. Add a clear button for the piano roll editor
+7. Add zoom and pan to the piano roll editor
 
 The first three features share waveform coordinate and selection behavior and
 should use the same viewport model. Dynamic performance pads should follow once
