@@ -600,4 +600,32 @@ function knobUp() {
 .drag-hint {
   font-size: 10px;
 }
+
+@media (max-width: 820px) {
+  .head {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .slice-btns {
+    flex-wrap: wrap;
+  }
+  /* stack the controls so the pitch knob can't overlap anything */
+  .controls {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
+  }
+  .stretch {
+    flex: none;
+    min-width: 0;
+  }
+  .ctl-body {
+    height: auto;
+    min-height: 44px;
+  }
+  /* no hover on touch — keep the per-slice actions visible */
+  .tile-actions {
+    opacity: 1;
+  }
+}
 </style>

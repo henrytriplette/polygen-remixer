@@ -121,4 +121,20 @@ function hit(i: number) {
   font-weight: 600;
   z-index: 1;
 }
+
+@media (max-width: 820px) {
+  .perform {
+    padding: 14px;
+    gap: 12px;
+  }
+  /* 2 × 4 grid gives far bigger touch targets than 4 × 2 on a phone */
+  .pads {
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: repeat(4, minmax(96px, 1fr));
+    gap: 12px;
+  }
+  .pad {
+    padding: 14px;
+  }
+}
 </style>

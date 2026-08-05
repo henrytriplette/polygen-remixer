@@ -277,4 +277,34 @@ function stepDbl(trackId: string, i: number) {
   color: var(--on-hue);
   font-weight: 700;
 }
+
+@media (max-width: 820px) {
+  /* stack: drum library on top (as a scrollable strip), grid below */
+  .seq {
+    display: flex;
+    flex-direction: column;
+  }
+  .library {
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+    max-height: 132px;
+  }
+  .lib-scroll {
+    flex-direction: row;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    gap: 14px;
+  }
+  .lib-group {
+    flex: 0 0 auto;
+  }
+  /* the step grid scrolls horizontally (already overflow-x:auto on .grid) */
+  .grid {
+    padding: 12px;
+  }
+  .track-head {
+    width: 108px;
+  }
+}
 </style>

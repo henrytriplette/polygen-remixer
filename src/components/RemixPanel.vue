@@ -110,4 +110,29 @@ import { REMIX_ACTIONS } from '../remix';
 .remix-btn:hover .arrow {
   opacity: 1;
 }
+
+@media (max-width: 820px) {
+  /* full-width section below the studio column, not a side rail */
+  .remix,
+  .remix.collapsed {
+    width: 100%;
+    flex-shrink: 1;
+  }
+  .remix.collapsed {
+    padding: 10px 14px;
+    align-items: stretch;
+    flex-direction: row;
+    justify-content: flex-end;
+  }
+  /* the two-line actions become a 2-col grid so they don't run too tall */
+  .actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    overflow: visible;
+  }
+  .arrow {
+    opacity: 1;
+  }
+}
 </style>
