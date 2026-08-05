@@ -2,6 +2,8 @@
 // scheduler. Everything timing-critical lives here, deliberately outside of
 // Vue's reactivity so the audio clock never hitches on a re-render.
 
+import { advanceTransportStep } from './transport';
+
 export type StepCallback = (step: number, time: number) => void;
 
 class AudioEngine {
@@ -23,6 +25,7 @@ class AudioEngine {
   private lookahead = 25; // ms timer interval
   private scheduleAhead = 0.1; // seconds to schedule in advance
   private timerId: number | null = null;
+  private stopTimerId: number | null = null;
 
   private stepCallbacks = new Set<StepCallback>();
   // Fired (via requestAnimationFrame) so the UI can light up the playhead.
@@ -77,6 +80,10 @@ class AudioEngine {
     const ctx = this.ensure();
     if (ctx.state === 'suspended') await ctx.resume();
     if (this.isPlaying) return;
+    if (this.stopTimerId !== null) {
+      clearTimeout(this.stopTimerId);
+      this.stopTimerId = null;
+    }
     this.isPlaying = true;
     this.currentStep = 0;
     this.nextNoteTime = ctx.currentTime + 0.05;
@@ -89,6 +96,10 @@ class AudioEngine {
     if (this.timerId !== null) {
       clearInterval(this.timerId);
       this.timerId = null;
+    }
+    if (this.stopTimerId !== null) {
+      clearTimeout(this.stopTimerId);
+      this.stopTimerId = null;
     }
     this.currentStep = 0;
     this.visualQueue = [];
@@ -104,12 +115,18 @@ class AudioEngine {
       this.visualQueue.push({ step, time });
       // advance
       this.nextNoteTime += this.secondsPerStep();
-      this.currentStep = (this.currentStep + 1) % this.totalSteps;
-      if (this.currentStep === 0 && !this.loop) {
+      const advance = advanceTransportStep(this.currentStep, this.totalSteps, this.loop);
+      this.currentStep = advance.nextStep;
+      if (advance.finished) {
         // schedule a stop once the last note has played
         const stopAt = this.nextNoteTime;
         const delay = (stopAt - this.ctx.currentTime) * 1000;
-        setTimeout(() => this.stop(), Math.max(0, delay));
+        this.timerId = null;
+        this.stopTimerId = window.setTimeout(() => {
+          this.stopTimerId = null;
+          this.stop();
+        }, Math.max(0, delay));
+        return;
       }
     }
     this.timerId = window.setTimeout(this.scheduler, this.lookahead);

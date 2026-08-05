@@ -211,14 +211,38 @@ function fft(re: Float32Array, im: Float32Array) {
   }
 }
 
-export function analyze(buffer: AudioBuffer): Analysis {
-  const data = buffer.getChannelData(0);
+export function analyzeSamples(
+  data: Float32Array,
+  sampleRate: number,
+  duration: number,
+): Analysis {
   return {
     peaks: computePeaks(data),
-    bpm: detectBPM(data, buffer.sampleRate),
-    key: detectKey(data, buffer.sampleRate),
-    transients: detectTransients(data, buffer.sampleRate),
+    bpm: detectBPM(data, sampleRate),
+    key: detectKey(data, sampleRate),
+    transients: detectTransients(data, sampleRate),
     loudnessDb: rmsDb(data),
-    duration: buffer.duration,
+    duration,
   };
+}
+
+export function analyze(buffer: AudioBuffer): Analysis {
+  return analyzeSamples(buffer.getChannelData(0), buffer.sampleRate, buffer.duration);
+}
+
+export function analyzeAsync(buffer: AudioBuffer): Promise<Analysis> {
+  if (typeof Worker === 'undefined') return Promise.resolve(analyze(buffer));
+  return new Promise((resolve) => {
+    const worker = new Worker(new URL('./analysis.worker.ts', import.meta.url), { type: 'module' });
+    const data = new Float32Array(buffer.getChannelData(0));
+    worker.addEventListener('message', (event: MessageEvent<Analysis>) => {
+      worker.terminate();
+      resolve(event.data);
+    }, { once: true });
+    worker.addEventListener('error', () => {
+      worker.terminate();
+      resolve(analyze(buffer));
+    }, { once: true });
+    worker.postMessage({ data, sampleRate: buffer.sampleRate, duration: buffer.duration }, [data.buffer]);
+  });
 }

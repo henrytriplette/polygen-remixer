@@ -60,7 +60,7 @@ function noise(ctx: BaseAudioContext): AudioBuffer {
 
 /** Trigger one drum hit into `dest` at absolute context time `t`. */
 export function playDrum(
-  ctx: AudioContext,
+  ctx: BaseAudioContext,
   dest: AudioNode,
   preset: DrumPreset,
   t: number,
@@ -82,7 +82,7 @@ export function playDrum(
   }
 }
 
-function kick(ctx: AudioContext, dest: AudioNode, p: DrumPreset, t: number, v: number) {
+function kick(ctx: BaseAudioContext, dest: AudioNode, p: DrumPreset, t: number, v: number) {
   const osc = ctx.createOscillator();
   const gain = ctx.createGain();
   const f = p.tune;
@@ -96,7 +96,7 @@ function kick(ctx: AudioContext, dest: AudioNode, p: DrumPreset, t: number, v: n
   osc.stop(t + p.decay + 0.05);
 }
 
-function snare(ctx: AudioContext, dest: AudioNode, p: DrumPreset, t: number, v: number) {
+function snare(ctx: BaseAudioContext, dest: AudioNode, p: DrumPreset, t: number, v: number) {
   const src = ctx.createBufferSource();
   src.buffer = noise(ctx);
   const hp = ctx.createBiquadFilter();
@@ -124,7 +124,7 @@ function snare(ctx: AudioContext, dest: AudioNode, p: DrumPreset, t: number, v: 
   osc.stop(t + p.decay);
 }
 
-function hat(ctx: AudioContext, dest: AudioNode, p: DrumPreset, t: number, v: number) {
+function hat(ctx: BaseAudioContext, dest: AudioNode, p: DrumPreset, t: number, v: number) {
   const src = ctx.createBufferSource();
   src.buffer = noise(ctx);
   const hp = ctx.createBiquadFilter();
@@ -140,7 +140,7 @@ function hat(ctx: AudioContext, dest: AudioNode, p: DrumPreset, t: number, v: nu
   src.stop(t + p.decay + 0.02);
 }
 
-function clap(ctx: AudioContext, dest: AudioNode, p: DrumPreset, t: number, v: number) {
+function clap(ctx: BaseAudioContext, dest: AudioNode, p: DrumPreset, t: number, v: number) {
   // Three quick noise bursts create the classic clap flam.
   for (let i = 0; i < 3; i++) {
     const src = ctx.createBufferSource();
@@ -161,7 +161,7 @@ function clap(ctx: AudioContext, dest: AudioNode, p: DrumPreset, t: number, v: n
   }
 }
 
-function perc(ctx: AudioContext, dest: AudioNode, p: DrumPreset, t: number, v: number) {
+function perc(ctx: BaseAudioContext, dest: AudioNode, p: DrumPreset, t: number, v: number) {
   const osc = ctx.createOscillator();
   osc.type = 'square';
   osc.frequency.value = p.tune;
@@ -174,7 +174,7 @@ function perc(ctx: AudioContext, dest: AudioNode, p: DrumPreset, t: number, v: n
   osc.stop(t + p.decay + 0.02);
 }
 
-function crash(ctx: AudioContext, dest: AudioNode, p: DrumPreset, t: number, v: number) {
+function crash(ctx: BaseAudioContext, dest: AudioNode, p: DrumPreset, t: number, v: number) {
   const src = ctx.createBufferSource();
   src.buffer = noise(ctx);
   const hp = ctx.createBiquadFilter();

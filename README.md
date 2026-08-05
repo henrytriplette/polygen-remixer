@@ -21,7 +21,7 @@ Upload) to begin.
 
 ## What's implemented
 
-- **Upload & analysis** — decode any audio file, then estimate BPM
+- **Upload & analysis** — decode any audio file, then use a Web Worker to estimate BPM
   (onset-envelope autocorrelation), musical key (chroma + Krumhansl profiles),
   transients (spectral-flux onsets), duration and loudness.
 - **Sample editor** — canvas waveform with bar markers and a live playhead,
@@ -44,8 +44,9 @@ Upload) to begin.
   non-destructive and undoable.
 - **Performance mode** — 8 large pads (slices + drums) with keyboard triggers
   (1-4 / Q-W-E-R). A/S/D/F audition the drum lanes.
-- **Export** — render the loop to WAV via an OfflineAudioContext; save/load the
-  arrangement as a `.remix.json` project file.
+- **Export** — render the live mixer, insert effects and limiter to WAV via an
+  OfflineAudioContext; save/load a self-contained `.remix.json` project file
+  with the active sample embedded.
 - **Undo / redo** across edits.
 
 ## Architecture

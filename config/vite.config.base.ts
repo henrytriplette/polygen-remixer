@@ -4,7 +4,7 @@ import path from 'path';
 import vue from '@vitejs/plugin-vue';
 import { VitePWA } from 'vite-plugin-pwa';
 
-const root = path.resolve(__dirname, '..');
+const root = path.resolve(import.meta.dirname, '..');
 
 // https://vitejs.dev/config/
 export default defineConfig({

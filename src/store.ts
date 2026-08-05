@@ -5,38 +5,21 @@
 import { reactive, watch } from 'vue';
 import { engine } from './audio/engine';
 import { Channel } from './audio/channel';
-import { SamplePlayer, makeSlices, evenSlices, nextSliceId } from './audio/sample';
+import { SamplePlayer, makeSlices, evenSlices, nextSliceId, cropBuffer } from './audio/sample';
 import type { Slice } from './audio/sample';
 import { Synth, noteId } from './audio/synth';
 import type { Note } from './audio/synth';
 import { DRUM_LIBRARY, playDrum } from './audio/drums';
 import type { DrumPreset, DrumVoice } from './audio/drums';
-import { analyze } from './audio/analysis';
+import { analyze, analyzeAsync } from './audio/analysis';
 import { EFFECT_PARAM_SPECS } from './audio/effects';
 import type { EffectType } from './audio/effects';
 import { audioBufferToWav, downloadBlob } from './audio/wav';
+import { isProjectFile } from './project';
+import type { DrumTrack, ProjectFileV2, SavedEffect, Step } from './project';
+export type { Step } from './project';
 
-export interface Step {
-  on: boolean;
-  velocity: number; // 0..1
-  prob: number; // 0..1
-  accent: boolean;
-}
-
-export interface DrumTrack {
-  id: string;
-  name: string;
-  voice: DrumVoice;
-  presetId: string;
-  steps: Step[];
-  muted: boolean;
-}
-
-export interface UiEffect {
-  id: string;
-  type: EffectType;
-  params: Record<string, number>;
-}
+export interface UiEffect extends SavedEffect {}
 
 export interface UiChannel {
   key: string;
@@ -65,8 +48,11 @@ interface State {
   loudness: number;
   peaks: number[];
   slices: Slice[];
-  sampleSteps: (string | null)[]; // slice id per step
+  sampleGrid: boolean[][]; // sample step sequencer: [sliceIndex][step] on/off
   sliceMode: boolean;
+  trimStart: number; // seconds — start of the active/selection region
+  trimEnd: number; // seconds — end of the active/selection region
+  trimmed: boolean; // has the buffer been cropped from the original?
   stretch: number;
   pitch: number;
   wholeReversed: boolean;
@@ -86,7 +72,7 @@ interface State {
   channels: UiChannel[];
   // ui
   view: 'studio' | 'perform';
-  workspace: 'beat' | 'melody' | 'effects' | 'mix';
+  workspace: 'beat' | 'chops' | 'melody' | 'effects' | 'mix';
   theme: 'dark' | 'light';
   remixOpen: boolean;
   activeEffectChannel: string;
@@ -114,8 +100,11 @@ export const state = reactive<State>({
   loudness: 0,
   peaks: [],
   slices: [],
-  sampleSteps: [],
+  sampleGrid: [],
   sliceMode: false,
+  trimStart: 0,
+  trimEnd: 0,
+  trimmed: false,
   stretch: 1,
   pitch: 0,
   wholeReversed: false,
@@ -158,7 +147,7 @@ export const state = reactive<State>({
 const WORKSPACE_KEY = 'remix.workspace';
 const REMIX_OPEN_KEY = 'remix.remixOpen';
 const THEME_KEY = 'remix.theme';
-const VALID_WORKSPACES = ['beat', 'melody', 'effects', 'mix'] as const;
+const VALID_WORKSPACES = ['beat', 'chops', 'melody', 'effects', 'mix'] as const;
 
 function applyTheme(theme: State['theme']) {
   document.documentElement.setAttribute('data-theme', theme);
@@ -222,6 +211,7 @@ watch(
 const channels: Record<string, Channel> = {};
 let samplePlayer: SamplePlayer | null = null;
 let bassSynth: Synth | null = null;
+let originalBuffer: AudioBuffer | null = null; // kept so trim can be reset
 
 function presetById(voice: DrumVoice, id: string): DrumPreset {
   return DRUM_LIBRARY[voice].find((p) => p.id === id) || DRUM_LIBRARY[voice][0];
@@ -230,12 +220,47 @@ function presetById(voice: DrumVoice, id: string): DrumPreset {
 function initAudio() {
   const ctx = engine.ensure();
   if (Object.keys(channels).length) return;
-  for (const def of CHANNEL_DEFS) channels[def.key] = new Channel(ctx, engine.master);
+  Object.assign(channels, createConfiguredChannels(ctx, engine.master));
   samplePlayer = new SamplePlayer(ctx, channels.sample.input);
   bassSynth = new Synth(ctx, channels.bass.input);
+  bassSynth.wave = state.synthWave as Synth['wave'];
 
   engine.onStep((step, time) => scheduleStep(step, time));
   engine.onVisualStep = (s) => (state.currentStep = s);
+}
+
+function createConfiguredChannels(ctx: BaseAudioContext, bus: AudioNode): Record<string, Channel> {
+  const configured: Record<string, Channel> = {};
+  const anySolo = state.channels.some((channel) => channel.soloed);
+  for (const ui of state.channels) {
+    const channel = new Channel(ctx, bus);
+    channel.soloed = ui.soloed;
+    channel.setPan(ui.pan);
+    channel.setVolume(ui.volume);
+    channel.setMute(ui.muted);
+    for (const savedEffect of ui.effects) {
+      const effect = channel.addEffect(savedEffect.type);
+      for (const [name, value] of Object.entries(savedEffect.params)) {
+        effect.setParam(name, value);
+      }
+    }
+    channel.applyGain(anySolo);
+    configured[ui.key] = channel;
+  }
+  return configured;
+}
+
+function rebuildAudioGraph() {
+  const ctx = engine.ensure();
+  const buffer = samplePlayer?.buffer ?? null;
+  Object.values(channels).forEach((channel) => channel.dispose());
+  for (const key of Object.keys(channels)) delete channels[key];
+  Object.assign(channels, createConfiguredChannels(ctx, engine.master));
+  samplePlayer = new SamplePlayer(ctx, channels.sample.input);
+  bassSynth = new Synth(ctx, channels.bass.input);
+  bassSynth.wave = state.synthWave as Synth['wave'];
+  if (buffer) samplePlayer.load(buffer);
+  applySampleParams();
 }
 
 let metroBeat = 0;
@@ -250,11 +275,11 @@ function scheduleStep(step: number, time: number) {
     const vel = st.velocity * (st.accent ? 1.3 : 1);
     playDrum(ctx, channels.beat.input, presetById(track.voice, track.presetId), time, vel);
   }
-  // sample slices
-  const sliceId = state.sampleSteps[step];
-  if (sliceId && samplePlayer) {
-    const slice = state.slices.find((s) => s.id === sliceId);
-    if (slice) samplePlayer.playSlice(slice, time);
+  // sample slices — polyphonic step grid (any number of chops per step)
+  if (samplePlayer) {
+    for (let i = 0; i < state.slices.length; i++) {
+      if (state.sampleGrid[i]?.[step]) samplePlayer.playSlice(state.slices[i], time);
+    }
   }
   // bass / melody notes
   if (bassSynth) {
@@ -288,11 +313,18 @@ function snapshot(): Snapshot {
   return JSON.stringify({
     drums: state.drums,
     notes: state.notes,
-    sampleSteps: state.sampleSteps,
+    sampleGrid: state.sampleGrid,
     slices: state.slices,
     pitch: state.pitch,
     stretch: state.stretch,
     wholeReversed: state.wholeReversed,
+    bpm: state.bpm,
+    bars: state.bars,
+    totalSteps: state.totalSteps,
+    loop: state.loop,
+    metronome: state.metronome,
+    synthWave: state.synthWave,
+    channels: state.channels.map(({ meter: _meter, ...channel }) => channel),
   });
 }
 
@@ -308,11 +340,22 @@ function restore(snap: Snapshot) {
   const s = JSON.parse(snap);
   state.drums = s.drums;
   state.notes = s.notes;
-  state.sampleSteps = s.sampleSteps;
+  state.sampleGrid = s.sampleGrid;
   state.slices = s.slices;
   state.pitch = s.pitch;
   state.stretch = s.stretch;
   state.wholeReversed = s.wholeReversed;
+  state.bpm = s.bpm;
+  state.bars = s.bars;
+  state.totalSteps = s.totalSteps;
+  state.loop = s.loop;
+  state.metronome = s.metronome;
+  state.synthWave = s.synthWave;
+  state.channels = s.channels.map((channel: Omit<UiChannel, 'meter'>) => ({ ...channel, meter: 0 }));
+  engine.bpm = state.bpm;
+  engine.bars = state.bars;
+  engine.loop = state.loop;
+  if (Object.keys(channels).length) rebuildAudioGraph();
   applySampleParams();
 }
 
@@ -343,8 +386,9 @@ export async function loadFile(file: File) {
   try {
     const arr = await file.arrayBuffer();
     const buffer = await ctx.decodeAudioData(arr.slice(0));
+    originalBuffer = buffer;
     samplePlayer!.load(buffer);
-    const a = analyze(buffer);
+    const a = await analyzeAsync(buffer);
     state.peaks = Array.from(a.peaks);
     state.originalBpm = a.bpm;
     state.key = a.key;
@@ -352,6 +396,10 @@ export async function loadFile(file: File) {
     state.loudness = a.loudnessDb;
     state.bpm = a.bpm;
     (state as any)._transients = a.transients;
+    // trim selection starts as the whole sample
+    state.trimStart = 0;
+    state.trimEnd = a.duration;
+    state.trimmed = false;
     // default: one auto-slice pass so the sample is immediately playable
     state.slices = makeSlices(a.transients, a.duration);
     distributeSlices();
@@ -366,34 +414,112 @@ export async function loadFile(file: File) {
   }
 }
 
-/** Map current slices across the loop's steps, evenly. */
+/** Build a default sample grid: each slice fires once, spread across the loop. */
 export function distributeSlices() {
   const steps = state.totalSteps;
-  const arr: (string | null)[] = new Array(steps).fill(null);
+  const grid: boolean[][] = state.slices.map(() => new Array(steps).fill(false));
   if (state.slices.length) {
     const per = Math.max(1, Math.floor(steps / state.slices.length));
-    state.slices.forEach((s, i) => {
-      const idx = (i * per) % steps;
-      arr[idx] = s.id;
+    state.slices.forEach((_, i) => {
+      grid[i][(i * per) % steps] = true;
     });
   }
-  state.sampleSteps = arr;
+  state.sampleGrid = grid;
 }
 
-/** Drag-to-rearrange: move a slice to a new position; playback order follows. */
+/** Toggle one cell of the sample step sequencer. */
+export function toggleSampleStep(row: number, step: number) {
+  const r = state.sampleGrid[row];
+  if (!r || step < 0 || step >= r.length) return;
+  pushHistory();
+  r[step] = !r[step];
+}
+
+/** Clear every cell of the sample sequencer. */
+export function clearSampleGrid() {
+  pushHistory();
+  state.sampleGrid = state.slices.map(() => new Array(state.totalSteps).fill(false));
+}
+
+// ---- Trim ------------------------------------------------------------------
+
+/** Update the trim selection [start, end] (seconds), clamped with a min gap. */
+export function setTrim(start: number, end: number) {
+  const dur = state.duration || 0;
+  const gap = 0.02;
+  start = Math.max(0, Math.min(start, dur - gap));
+  end = Math.min(dur, Math.max(end, start + gap));
+  state.trimStart = start;
+  state.trimEnd = end;
+}
+
+/** Re-derive everything from a (possibly cropped) buffer and reset the trim. */
+function loadBuffer(buffer: AudioBuffer, trimmed: boolean) {
+  samplePlayer!.load(buffer);
+  const a = analyze(buffer);
+  state.peaks = Array.from(a.peaks);
+  state.duration = a.duration;
+  state.loudness = a.loudnessDb;
+  // re-detect tempo & key for the new region and apply the tempo to the engine
+  state.originalBpm = a.bpm;
+  state.key = a.key;
+  setBpm(a.bpm, false);
+  (state as any)._transients = a.transients;
+  state.slices = makeSlices(a.transients, a.duration);
+  if (state.wholeReversed) state.slices.forEach((s) => (s.reversed = true));
+  state.trimStart = 0;
+  state.trimEnd = a.duration;
+  state.trimmed = trimmed;
+  applySampleParams();
+  distributeSlices();
+}
+
+/** Crop the buffer down to the current trim selection (destructive, resettable). */
+export function applyTrim() {
+  if (!samplePlayer?.buffer) return;
+  const s = state.trimStart;
+  const e = state.trimEnd;
+  if (e - s < 0.02 || (s < 0.005 && e > state.duration - 0.005)) {
+    toast('Select a region to trim first');
+    return;
+  }
+  const ctx = engine.ensure();
+  loadBuffer(cropBuffer(ctx, samplePlayer.buffer, s, e), true);
+  toast(`Trimmed to ${(e - s).toFixed(2)}s`);
+}
+
+/** Restore the originally-loaded sample. */
+export function resetSample() {
+  if (!originalBuffer) return;
+  loadBuffer(originalBuffer, false);
+  toast('Restored original sample');
+}
+
+/** Audition just the current trim selection. */
+export function previewTrim() {
+  initAudio();
+  const ctx = engine.ensure();
+  if (ctx.state === 'suspended') ctx.resume();
+  samplePlayer?.playRegion(state.trimStart, state.trimEnd, ctx.currentTime + 0.01);
+}
+
+/** Drag-to-rearrange: move a slice (and its sequencer row) to a new position. */
 export function moveSlice(from: number, to: number) {
   if (from === to || from < 0 || to < 0) return;
   if (from >= state.slices.length || to >= state.slices.length) return;
   pushHistory();
   const [item] = state.slices.splice(from, 1);
   state.slices.splice(to, 0, item);
-  distributeSlices();
+  const [row] = state.sampleGrid.splice(from, 1);
+  if (row) state.sampleGrid.splice(to, 0, row);
 }
 
 export function deleteSlice(id: string) {
+  const i = state.slices.findIndex((s) => s.id === id);
+  if (i < 0) return;
   pushHistory();
-  state.slices = state.slices.filter((s) => s.id !== id);
-  distributeSlices();
+  state.slices.splice(i, 1);
+  state.sampleGrid.splice(i, 1);
 }
 
 export function duplicateSlice(id: string) {
@@ -401,7 +527,10 @@ export function duplicateSlice(id: string) {
   if (i < 0) return;
   pushHistory();
   state.slices.splice(i + 1, 0, { ...state.slices[i], id: nextSliceId() });
-  distributeSlices();
+  const row = state.sampleGrid[i]
+    ? [...state.sampleGrid[i]]
+    : new Array(state.totalSteps).fill(false);
+  state.sampleGrid.splice(i + 1, 0, row);
 }
 
 export function toggleSliceReverse(id: string) {
@@ -435,29 +564,41 @@ export function setSliceMode(on: boolean, kind: 'auto' | 'random' | 'even' = 'au
   distributeSlices();
 }
 
-export function toggleStep(trackId: string, i: number) {
+export function toggleStep(trackId: string, i: number, recordHistory = true) {
   const t = state.drums.find((d) => d.id === trackId);
   if (!t) return;
-  pushHistory();
+  if (recordHistory) pushHistory();
   t.steps[i].on = !t.steps[i].on;
 }
 
 export function setStepVelocity(trackId: string, i: number, v: number) {
   const t = state.drums.find((d) => d.id === trackId);
-  if (t) t.steps[i].velocity = v;
+  if (t) {
+    pushHistory();
+    t.steps[i].velocity = v;
+  }
 }
 export function setStepProb(trackId: string, i: number, p: number) {
   const t = state.drums.find((d) => d.id === trackId);
-  if (t) t.steps[i].prob = p;
+  if (t) {
+    pushHistory();
+    t.steps[i].prob = p;
+  }
 }
 export function toggleAccent(trackId: string, i: number) {
   const t = state.drums.find((d) => d.id === trackId);
-  if (t) t.steps[i].accent = !t.steps[i].accent;
+  if (t) {
+    pushHistory();
+    t.steps[i].accent = !t.steps[i].accent;
+  }
 }
 
 export function setDrumPreset(trackId: string, presetId: string) {
   const t = state.drums.find((d) => d.id === trackId);
-  if (t) t.presetId = presetId;
+  if (t && t.presetId !== presetId) {
+    pushHistory();
+    t.presetId = presetId;
+  }
 }
 
 export function auditionDrum(voice: DrumVoice, presetId: string) {
@@ -476,7 +617,9 @@ export function removeNote(id: string) {
   pushHistory();
   state.notes = state.notes.filter((n) => n.id !== id);
 }
-export function setSynthWave(w: string) {
+export function setSynthWave(w: string, recordHistory = true) {
+  if (state.synthWave === w) return;
+  if (recordHistory) pushHistory();
   state.synthWave = w;
   if (bassSynth) bassSynth.wave = w as any;
 }
@@ -520,7 +663,9 @@ export function stop() {
   state.playing = false;
   state.currentStep = -1;
 }
-export function setBpm(v: number) {
+export function setBpm(v: number, recordHistory = true) {
+  if (state.bpm === v) return;
+  if (recordHistory) pushHistory();
   state.bpm = v;
   engine.bpm = v;
 }
@@ -533,6 +678,8 @@ export function toggleMetronome() {
 }
 
 export function setBars(bars: number) {
+  if (state.bars === bars) return;
+  pushHistory();
   const newTotal = bars * 16;
   const resize = (steps: Step[]) => {
     const out = makeSteps(newTotal);
@@ -540,10 +687,15 @@ export function setBars(bars: number) {
     return out;
   };
   state.drums.forEach((d) => (d.steps = resize(d.steps)));
+  // resize the sample grid the same way (loop the existing pattern)
+  state.sampleGrid = state.sampleGrid.map((row) => {
+    const out = new Array(newTotal).fill(false);
+    if (row.length) for (let i = 0; i < newTotal; i++) out[i] = row[i % row.length];
+    return out;
+  });
   state.bars = bars;
   state.totalSteps = newTotal;
   engine.bars = bars;
-  distributeSlices();
 }
 
 // mixer
@@ -560,6 +712,7 @@ export function setChannelPan(key: string, p: number) {
 export function toggleMute(key: string) {
   const c = state.channels.find((x) => x.key === key);
   if (!c) return;
+  pushHistory();
   c.muted = !c.muted;
   channels[key]?.setMute(c.muted);
   refreshSolo();
@@ -567,6 +720,7 @@ export function toggleMute(key: string) {
 export function toggleSolo(key: string) {
   const c = state.channels.find((x) => x.key === key);
   if (!c) return;
+  pushHistory();
   c.soloed = !c.soloed;
   if (channels[key]) channels[key].soloed = c.soloed;
   refreshSolo();
@@ -577,15 +731,18 @@ function refreshSolo() {
 }
 
 // effects
-export function addEffect(channelKey: string, type: EffectType) {
+export function addEffect(channelKey: string, type: EffectType, recordHistory = true) {
   initAudio();
   const ch = channels[channelKey];
   if (!ch) return;
+  if (recordHistory) pushHistory();
   const fx = ch.addEffect(type);
   const uiCh = state.channels.find((c) => c.key === channelKey)!;
   uiCh.effects.push({ id: fx.id, type, params: { ...fx.params } });
 }
 export function removeEffect(channelKey: string, id: string) {
+  if (!channels[channelKey]?.effects.some((effect) => effect.id === id)) return;
+  pushHistory();
   channels[channelKey]?.removeEffect(id);
   const uiCh = state.channels.find((c) => c.key === channelKey)!;
   uiCh.effects = uiCh.effects.filter((e) => e.id !== id);
@@ -598,6 +755,8 @@ export function setEffectParam(channelKey: string, id: string, name: string, val
   if (uiFx) uiFx.params[name] = value;
 }
 export function reorderEffect(channelKey: string, from: number, to: number) {
+  if (from === to) return;
+  pushHistory();
   channels[channelKey]?.reorder(from, to);
   const uiCh = state.channels.find((c) => c.key === channelKey)!;
   const [item] = uiCh.effects.splice(from, 1);
@@ -645,31 +804,40 @@ export async function exportWav() {
   toast('Rendering WAV…');
   const loops = 2;
   const secondsPerStep = 60 / state.bpm / 4;
-  const dur = state.totalSteps * secondsPerStep * loops + 1;
+  const effectTail = Math.max(
+    1,
+    ...state.channels.flatMap((channel) =>
+      channel.effects.map((effect) => {
+        if (effect.type === 'reverb') return Math.min(10, effect.params.size ?? 2);
+        if (effect.type === 'delay') return Math.min(10, (effect.params.time ?? 0.4) * 8);
+        return 1;
+      }),
+    ),
+  );
+  const dur = state.totalSteps * secondsPerStep * loops + effectTail;
   const rate = 44100;
   const offline = new OfflineAudioContext(2, Math.ceil(dur * rate), rate);
 
-  // Rebuild a minimal graph in the offline context.
+  // Rebuild the live master and channel graph in the offline context.
   const master = offline.createGain();
   master.gain.value = 0.9;
-  master.connect(offline.destination);
+  const limiter = offline.createDynamicsCompressor();
+  limiter.threshold.value = -3;
+  limiter.knee.value = 6;
+  limiter.ratio.value = 12;
+  limiter.attack.value = 0.002;
+  limiter.release.value = 0.15;
+  master.connect(limiter);
+  limiter.connect(offline.destination);
 
-  const offChans: Record<string, GainNode> = {};
-  for (const def of CHANNEL_DEFS) {
-    const g = offline.createGain();
-    const ui = state.channels.find((c) => c.key === def.key)!;
-    g.gain.value = ui.muted ? 0 : ui.volume;
-    g.connect(master);
-    offChans[def.key] = g;
-  }
-
-  const offSample = new SamplePlayer(offline as any, offChans.sample);
+  const offChans = createConfiguredChannels(offline, master);
+  const offSample = new SamplePlayer(offline, offChans.sample.input);
   offSample.load(samplePlayer.buffer);
   offSample.pitch = state.pitch;
   offSample.rate = state.stretch;
   offSample.wholeReversed = state.wholeReversed;
-  const offSynth = new Synth(offline as any, offChans.bass);
-  offSynth.wave = state.synthWave as any;
+  const offSynth = new Synth(offline, offChans.bass.input);
+  offSynth.wave = state.synthWave as Synth['wave'];
 
   for (let loop = 0; loop < loops; loop++) {
     for (let step = 0; step < state.totalSteps; step++) {
@@ -678,13 +846,12 @@ export async function exportWav() {
         if (track.muted) continue;
         const st = track.steps[step];
         if (!st?.on) continue;
+        if (st.prob < 1 && Math.random() > st.prob) continue;
         const vel = st.velocity * (st.accent ? 1.3 : 1);
-        playDrum(offline as any, offChans.beat, presetById(track.voice, track.presetId), t, vel);
+        playDrum(offline, offChans.beat.input, presetById(track.voice, track.presetId), t, vel);
       }
-      const sliceId = state.sampleSteps[step];
-      if (sliceId) {
-        const slice = state.slices.find((s) => s.id === sliceId);
-        if (slice) offSample.playSlice(slice, t);
+      for (let i = 0; i < state.slices.length; i++) {
+        if (state.sampleGrid[i]?.[step]) offSample.playSlice(state.slices[i], t);
       }
       for (const n of state.notes) {
         if (n.start === step) offSynth.play(n.midi, t, n.length * secondsPerStep, n.velocity);
@@ -698,24 +865,109 @@ export async function exportWav() {
   toast('Exported WAV ✓');
 }
 
-export function saveProject() {
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
+export async function saveProject() {
+  if (!samplePlayer?.buffer) {
+    toast('Load a sample first');
+    return;
+  }
+  toast('Saving project…');
+  const audioData = await blobToDataUrl(audioBufferToWav(samplePlayer.buffer));
   const project = {
-    version: 1,
+    version: 2,
+    audioData,
     sampleName: state.sampleName,
+    originalBpm: state.originalBpm,
+    key: state.key,
     bpm: state.bpm,
     bars: state.bars,
+    loop: state.loop,
+    metronome: state.metronome,
     drums: state.drums,
     notes: state.notes,
     slices: state.slices,
-    sampleSteps: state.sampleSteps,
-    channels: state.channels.map((c) => ({
-      key: c.key,
-      volume: c.volume,
-      pan: c.pan,
-      muted: c.muted,
+    sampleGrid: state.sampleGrid,
+    pitch: state.pitch,
+    stretch: state.stretch,
+    wholeReversed: state.wholeReversed,
+    synthWave: state.synthWave,
+    channels: state.channels.map(({ key, volume, pan, muted, soloed, effects }) => ({
+      key, volume, pan, muted, soloed, effects,
     })),
-  };
+  } satisfies ProjectFileV2;
   const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' });
   downloadBlob(blob, (state.sampleName || 'remix').replace(/\.[^.]+$/, '') + '.remix.json');
   toast('Project saved');
+}
+
+export async function loadProject(file: File) {
+  state.analyzing = true;
+  try {
+    const parsed: unknown = JSON.parse(await file.text());
+    if (!isProjectFile(parsed)) throw new Error('Unsupported or invalid project file');
+
+    stop();
+    const ctx = engine.ensure();
+    if (ctx.state === 'suspended') await ctx.resume();
+    const encodedAudio = await fetch(parsed.audioData).then((response) => response.arrayBuffer());
+    const buffer = await ctx.decodeAudioData(encodedAudio);
+
+    state.sampleName = parsed.sampleName;
+    state.originalBpm = parsed.originalBpm;
+    state.key = parsed.key;
+    state.duration = buffer.duration;
+    const restoredAnalysis = await analyzeAsync(buffer);
+    state.loudness = restoredAnalysis.loudnessDb;
+    state.peaks = Array.from(restoredAnalysis.peaks);
+    state.bpm = parsed.bpm;
+    state.bars = parsed.bars;
+    state.totalSteps = parsed.bars * 16;
+    state.loop = parsed.loop;
+    state.metronome = parsed.metronome;
+    state.drums = parsed.drums;
+    state.notes = parsed.notes;
+    state.slices = parsed.slices;
+    state.sampleGrid = parsed.sampleGrid;
+    state.pitch = parsed.pitch;
+    state.stretch = parsed.stretch;
+    state.wholeReversed = parsed.wholeReversed;
+    state.synthWave = parsed.synthWave;
+    state.channels = parsed.channels.map((saved) => ({
+      ...saved,
+      name: CHANNEL_DEFS.find((channel) => channel.key === saved.key)?.name ?? saved.key,
+      accent: CHANNEL_DEFS.find((channel) => channel.key === saved.key)?.accent ?? 'var(--cyan)',
+      meter: 0,
+    }));
+    state.trimStart = 0;
+    state.trimEnd = buffer.duration;
+    state.trimmed = false;
+    state.hasSample = true;
+    state.ready = true;
+
+    engine.bpm = parsed.bpm;
+    engine.bars = parsed.bars;
+    engine.loop = parsed.loop;
+    originalBuffer = buffer;
+    rebuildAudioGraph();
+    samplePlayer!.load(buffer);
+    applySampleParams();
+    undoStack.length = 0;
+    redoStack.length = 0;
+    state.canUndo = false;
+    state.canRedo = false;
+    toast(`Loaded ${file.name}`);
+  } catch (error) {
+    console.error(error);
+    toast(error instanceof Error ? error.message : 'Could not load project');
+  } finally {
+    state.analyzing = false;
+  }
 }

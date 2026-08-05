@@ -51,7 +51,7 @@ function makeImpulse(ctx: BaseAudioContext, seconds: number, decay: number) {
   return impulse;
 }
 
-export function createEffect(ctx: AudioContext, type: EffectType): Effect {
+export function createEffect(ctx: BaseAudioContext, type: EffectType): Effect {
   switch (type) {
     case 'filter':
       return filterEffect(ctx);
@@ -76,7 +76,7 @@ export function createEffect(ctx: AudioContext, type: EffectType): Effect {
   }
 }
 
-function filterEffect(ctx: AudioContext): Effect {
+function filterEffect(ctx: BaseAudioContext): Effect {
   const node = ctx.createBiquadFilter();
   node.type = 'lowpass';
   node.frequency.value = 12000;
@@ -101,7 +101,7 @@ function filterEffect(ctx: AudioContext): Effect {
   };
 }
 
-function eqEffect(ctx: AudioContext): Effect {
+function eqEffect(ctx: BaseAudioContext): Effect {
   const low = ctx.createBiquadFilter();
   low.type = 'lowshelf';
   low.frequency.value = 250;
@@ -135,7 +135,7 @@ function eqEffect(ctx: AudioContext): Effect {
   };
 }
 
-function reverbEffect(ctx: AudioContext): Effect {
+function reverbEffect(ctx: BaseAudioContext): Effect {
   const input = ctx.createGain();
   const output = ctx.createGain();
   const dry = ctx.createGain();
@@ -172,7 +172,7 @@ function reverbEffect(ctx: AudioContext): Effect {
   };
 }
 
-function delayEffect(ctx: AudioContext): Effect {
+function delayEffect(ctx: BaseAudioContext): Effect {
   const input = ctx.createGain();
   const output = ctx.createGain();
   const dry = ctx.createGain();
@@ -208,7 +208,7 @@ function delayEffect(ctx: AudioContext): Effect {
   };
 }
 
-function distortionEffect(ctx: AudioContext): Effect {
+function distortionEffect(ctx: BaseAudioContext): Effect {
   const input = ctx.createGain();
   const shaper = ctx.createWaveShaper();
   const output = ctx.createGain();
@@ -235,7 +235,7 @@ function distortionEffect(ctx: AudioContext): Effect {
   };
 }
 
-function bitcrusherEffect(ctx: AudioContext): Effect {
+function bitcrusherEffect(ctx: BaseAudioContext): Effect {
   // ScriptProcessor keeps this dependency-free and works everywhere.
   const input = ctx.createGain();
   const output = ctx.createGain();
@@ -278,7 +278,7 @@ function bitcrusherEffect(ctx: AudioContext): Effect {
   };
 }
 
-function chorusEffect(ctx: AudioContext): Effect {
+function chorusEffect(ctx: BaseAudioContext): Effect {
   const input = ctx.createGain();
   const output = ctx.createGain();
   const dry = ctx.createGain();
@@ -320,7 +320,7 @@ function chorusEffect(ctx: AudioContext): Effect {
   };
 }
 
-function compressorEffect(ctx: AudioContext): Effect {
+function compressorEffect(ctx: BaseAudioContext): Effect {
   const node = ctx.createDynamicsCompressor();
   node.threshold.value = -20;
   node.ratio.value = 4;
@@ -343,7 +343,7 @@ function compressorEffect(ctx: AudioContext): Effect {
   };
 }
 
-function phaserEffect(ctx: AudioContext): Effect {
+function phaserEffect(ctx: BaseAudioContext): Effect {
   const input = ctx.createGain();
   const output = ctx.createGain();
   const stages = [0, 0, 0, 0].map(() => {
@@ -384,7 +384,7 @@ function phaserEffect(ctx: AudioContext): Effect {
   };
 }
 
-function flangerEffect(ctx: AudioContext): Effect {
+function flangerEffect(ctx: BaseAudioContext): Effect {
   const input = ctx.createGain();
   const output = ctx.createGain();
   const delay = ctx.createDelay(0.02);

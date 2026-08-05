@@ -25,7 +25,7 @@ export type SynthWave = 'sawtooth' | 'square' | 'sine' | 'triangle';
 export class Synth {
   wave: SynthWave = 'sawtooth';
   cutoff = 1800;
-  constructor(private ctx: AudioContext, private dest: AudioNode) {}
+  constructor(private ctx: BaseAudioContext, private dest: AudioNode) {}
 
   play(midi: number, when: number, duration: number, velocity = 1) {
     const osc = this.ctx.createOscillator();

@@ -59,6 +59,24 @@ export function reverseBuffer(ctx: BaseAudioContext, buf: AudioBuffer): AudioBuf
   return out;
 }
 
+/** Return a new buffer containing only the [start, end] (seconds) region. */
+export function cropBuffer(
+  ctx: BaseAudioContext,
+  buf: AudioBuffer,
+  start: number,
+  end: number,
+): AudioBuffer {
+  const sr = buf.sampleRate;
+  const s = Math.max(0, Math.floor(start * sr));
+  const e = Math.min(buf.length, Math.floor(end * sr));
+  const len = Math.max(1, e - s);
+  const out = ctx.createBuffer(buf.numberOfChannels, len, sr);
+  for (let c = 0; c < buf.numberOfChannels; c++) {
+    out.getChannelData(c).set(buf.getChannelData(c).subarray(s, e));
+  }
+  return out;
+}
+
 export class SamplePlayer {
   buffer: AudioBuffer | null = null;
   reversed: AudioBuffer | null = null;
@@ -66,11 +84,17 @@ export class SamplePlayer {
   pitch = 0; // global semitones
   wholeReversed = false;
 
-  constructor(private ctx: AudioContext, private dest: AudioNode) {}
+  constructor(private ctx: BaseAudioContext, private dest: AudioNode) {}
 
   load(buffer: AudioBuffer) {
     this.buffer = buffer;
     this.reversed = reverseBuffer(this.ctx, buffer);
+  }
+
+  /** Audition an arbitrary [start, end] region of the buffer (trim preview). */
+  playRegion(start: number, end: number, when: number) {
+    if (!this.buffer) return;
+    return this.startSource(this.buffer, start, Math.max(0.01, end - start), when, 0, 1);
   }
 
   private startSource(

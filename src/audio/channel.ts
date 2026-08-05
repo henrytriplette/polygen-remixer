@@ -16,7 +16,7 @@ export class Channel {
   muted = false;
   soloed = false;
 
-  constructor(private ctx: AudioContext, bus: AudioNode) {
+  constructor(private ctx: BaseAudioContext, bus: AudioNode) {
     this.input = ctx.createGain();
     this.panner = ctx.createStereoPanner();
     this.gain = ctx.createGain();
@@ -60,6 +60,15 @@ export class Channel {
     const [item] = this.effects.splice(from, 1);
     this.effects.splice(to, 0, item);
     this.rewire();
+  }
+
+  dispose() {
+    this.input.disconnect();
+    this.effects.forEach((effect) => effect.dispose());
+    this.effects = [];
+    this.panner.disconnect();
+    this.gain.disconnect();
+    this.analyser.disconnect();
   }
 
   setVolume(v: number) {

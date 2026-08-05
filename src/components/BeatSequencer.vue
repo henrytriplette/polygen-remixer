@@ -31,7 +31,7 @@ function stepContext(e: MouseEvent, trackId: string, i: number) {
   const cur = t.steps[i].velocity;
   const next = cur > 0.85 ? 0.5 : cur > 0.45 ? 0.25 : 1;
   setStepVelocity(trackId, i, next);
-  if (!t.steps[i].on) toggleStep(trackId, i);
+  if (!t.steps[i].on) toggleStep(trackId, i, false);
 }
 function stepDbl(trackId: string, i: number) {
   const t = state.drums.find((d) => d.id === trackId)!;
@@ -102,6 +102,8 @@ function stepDbl(trackId: string, i: number) {
               v-for="(st, i) in track.steps"
               :key="i"
               class="step"
+              :aria-label="`${track.name} step ${i + 1}${st.accent ? ', accented' : ''}, ${Math.round(st.velocity * 100)} percent velocity, ${Math.round(st.prob * 100)} percent probability`"
+              :aria-pressed="st.on"
               :class="{
                 on: st.on,
                 accent: st.accent,

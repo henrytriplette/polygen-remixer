@@ -3,6 +3,7 @@ import { onMounted, onUnmounted } from 'vue';
 import TopToolbar from './components/TopToolbar.vue';
 import SampleEditor from './components/SampleEditor.vue';
 import BeatSequencer from './components/BeatSequencer.vue';
+import SampleSequencer from './components/SampleSequencer.vue';
 import PianoRoll from './components/PianoRoll.vue';
 import EffectsRack from './components/EffectsRack.vue';
 import Mixer from './components/Mixer.vue';
@@ -13,6 +14,7 @@ import { state, togglePlay, pollMeters, triggerPad, auditionDrum } from './store
 
 const workspaces = [
   { key: 'beat' as const, label: 'Beat', accent: 'var(--orange)' },
+  { key: 'chops' as const, label: 'Chops', accent: 'var(--cyan)' },
   { key: 'melody' as const, label: 'Melody', accent: 'var(--green)' },
   { key: 'effects' as const, label: 'Effects', accent: 'var(--purple)' },
   { key: 'mix' as const, label: 'Mix', accent: 'var(--cyan)' },
@@ -114,6 +116,7 @@ onUnmounted(() => {
 
           <div class="workspace">
             <BeatSequencer v-if="state.workspace === 'beat'" />
+            <SampleSequencer v-else-if="state.workspace === 'chops'" />
             <PianoRoll v-else-if="state.workspace === 'melody'" />
             <EffectsRack v-else-if="state.workspace === 'effects'" />
             <Mixer v-else />
@@ -313,6 +316,18 @@ onUnmounted(() => {
   .workspace {
     flex: none;
     min-height: 340px;
+  }
+  .ws-tabs {
+    gap: 2px;
+  }
+  .ws-tab {
+    min-width: 0;
+    gap: 4px;
+    padding: 8px 3px;
+  }
+  .ws-dot {
+    width: 5px;
+    height: 5px;
   }
   .workspace > section {
     flex: none;

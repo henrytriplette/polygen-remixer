@@ -6,6 +6,7 @@ import {
   removeEffect,
   setEffectParam,
   reorderEffect,
+  pushHistory,
   EFFECT_PARAM_SPECS,
 } from '../store';
 import type { EffectType } from '../audio/effects';
@@ -34,6 +35,7 @@ function pickChannel(key: string) {
 
 // XY pad for filter
 function xyDown(e: MouseEvent, fxId: string) {
+  pushHistory();
   const el = e.currentTarget as HTMLElement;
   const move = (ev: MouseEvent) => {
     const r = el.getBoundingClientRect();
@@ -91,9 +93,9 @@ function xyPos(params: Record<string, number>) {
         <div class="mod-head">
           <span class="mod-name">{{ fx.type }}</span>
           <div class="mod-actions">
-            <button class="ico" :disabled="idx === 0" @click="reorderEffect(activeCh.key, idx, idx - 1)">↑</button>
-            <button class="ico" :disabled="idx === activeCh.effects.length - 1" @click="reorderEffect(activeCh.key, idx, idx + 1)">↓</button>
-            <button class="ico del" @click="removeEffect(activeCh.key, fx.id)">✕</button>
+            <button class="ico" :disabled="idx === 0" :aria-label="`Move ${fx.type} earlier`" @click="reorderEffect(activeCh.key, idx, idx - 1)">↑</button>
+            <button class="ico" :disabled="idx === activeCh.effects.length - 1" :aria-label="`Move ${fx.type} later`" @click="reorderEffect(activeCh.key, idx, idx + 1)">↓</button>
+            <button class="ico del" :aria-label="`Remove ${fx.type}`" @click="removeEffect(activeCh.key, fx.id)">✕</button>
           </div>
         </div>
 
@@ -119,6 +121,8 @@ function xyPos(params: Record<string, number>) {
               :max="spec.max"
               :step="spec.step"
               :value="fx.params[spec.name]"
+              :aria-label="`${fx.type} ${spec.label}`"
+              @pointerdown="pushHistory"
               @input="setEffectParam(activeCh.key, fx.id, spec.name, +($event.target as HTMLInputElement).value)"
             />
           </div>

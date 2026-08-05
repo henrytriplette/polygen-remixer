@@ -16,19 +16,22 @@ import { state, togglePlay, stop, setLoop, toggleMetronome } from '../store';
     </div>
 
     <div class="center">
-      <button class="tbtn" title="To start" @click="stop">◄◄</button>
+      <button class="tbtn" title="To start" aria-label="Return to start" @click="stop">◄◄</button>
       <button
         class="tbtn play"
         :class="{ playing: state.playing }"
+        :aria-label="state.playing ? 'Pause' : 'Play'"
         @click="togglePlay"
       >
         {{ state.playing ? '❚❚' : '▶' }}
       </button>
-      <button class="tbtn" title="Stop" @click="stop">■</button>
+      <button class="tbtn" title="Stop" aria-label="Stop" @click="stop">■</button>
       <button
         class="tbtn loop"
         :class="{ on: state.loop }"
         title="Loop"
+        aria-label="Loop playback"
+        :aria-pressed="state.loop"
         @click="setLoop(!state.loop)"
       >
         ↻
@@ -37,6 +40,8 @@ import { state, togglePlay, stop, setLoop, toggleMetronome } from '../store';
         class="tbtn metro"
         :class="{ on: state.metronome }"
         title="Metronome"
+        aria-label="Metronome"
+        :aria-pressed="state.metronome"
         @click="toggleMetronome"
       >
         ⏱
@@ -182,7 +187,17 @@ import { state, togglePlay, stop, setLoop, toggleMetronome } from '../store';
 @media (max-width: 820px) {
   .transport {
     padding: 8px 10px;
-    gap: 8px;
+    gap: 5px;
+  }
+  .left,
+  .right {
+    min-width: 0;
+  }
+  .left {
+    flex: 0 1 54px;
+  }
+  .right {
+    flex: 0 1 38px;
   }
   .hint {
     display: none;
@@ -195,6 +210,9 @@ import { state, togglePlay, stop, setLoop, toggleMetronome } from '../store';
   }
   .bpm-num {
     font-size: 18px;
+  }
+  .bpm-unit {
+    display: none;
   }
   .center {
     gap: 6px;

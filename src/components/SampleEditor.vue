@@ -11,6 +11,11 @@ import {
   duplicateSlice,
   toggleSliceReverse,
   playSlicePreview,
+  setTrim,
+  applyTrim,
+  resetSample,
+  previewTrim,
+  pushHistory,
 } from '../store';
 
 const canvas = ref<HTMLCanvasElement | null>(null);
@@ -249,11 +254,40 @@ const markerLeft = computed(() => {
   return layout[ins].left * 100;
 });
 
+// ---- Trim handles ----------------------------------------------------------
+const trimStartPct = computed(() =>
+  state.duration ? (state.trimStart / state.duration) * 100 : 0,
+);
+const trimEndPct = computed(() =>
+  state.duration ? (state.trimEnd / state.duration) * 100 : 100,
+);
+const hasSelection = computed(
+  () => state.trimStart > 0.005 || state.trimEnd < state.duration - 0.005,
+);
+const trimDrag = ref<'start' | 'end' | null>(null);
+function trimDown(which: 'start' | 'end', e: PointerEvent) {
+  trimDrag.value = which;
+  (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+  e.stopPropagation();
+}
+function trimMove(e: PointerEvent) {
+  if (!trimDrag.value || !wrap.value) return;
+  const rect = wrap.value.getBoundingClientRect();
+  const f = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+  const t = f * state.duration;
+  if (trimDrag.value === 'start') setTrim(t, state.trimEnd);
+  else setTrim(state.trimStart, t);
+}
+function trimUp() {
+  trimDrag.value = null;
+}
+
 const pitchAngle = computed(() => (state.pitch / 12) * 135);
 let knobDrag = false;
 let startY = 0;
 let startPitch = 0;
 function knobDown(e: MouseEvent) {
+  pushHistory();
   knobDrag = true;
   startY = e.clientY;
   startPitch = state.pitch;
@@ -276,18 +310,35 @@ function knobUp() {
   <section class="editor panel">
     <div class="head">
       <span class="label">Sample Editor</span>
-      <div class="slice-btns">
-        <button
-          class="btn small"
-          :class="{ active: state.sliceMode }"
-          :style="state.sliceMode ? 'background:var(--cyan);border-color:var(--cyan)' : ''"
-          @click="setSliceMode(!state.sliceMode, 'auto')"
-        >
-          ✂ Slice
-        </button>
-        <button class="btn small ghost" @click="setSliceMode(true, 'auto')">Auto</button>
-        <button class="btn small ghost" @click="setSliceMode(true, 'even')">Manual</button>
-        <button class="btn small ghost" @click="setSliceMode(true, 'random')">Random</button>
+      <div class="editor-actions">
+        <div v-if="state.hasSample && !state.sliceMode" class="btn-group">
+          <button
+            class="btn small"
+            :disabled="!hasSelection"
+            :class="{ active: hasSelection }"
+            :style="hasSelection ? 'background:var(--accent);border-color:var(--accent);color:var(--on-accent)' : ''"
+            @click="applyTrim"
+          >
+            Trim
+          </button>
+          <button class="btn small ghost" @click="previewTrim">▶ Preview</button>
+          <button class="btn small ghost" :disabled="!state.trimmed" @click="resetSample">
+            ↺ Reset
+          </button>
+        </div>
+        <div class="slice-btns">
+          <button
+            class="btn small"
+            :class="{ active: state.sliceMode }"
+            :style="state.sliceMode ? 'background:var(--cyan);border-color:var(--cyan)' : ''"
+            @click="setSliceMode(!state.sliceMode, 'auto')"
+          >
+            ✂ Slice
+          </button>
+          <button class="btn small ghost" @click="setSliceMode(true, 'auto')">Auto</button>
+          <button class="btn small ghost" @click="setSliceMode(true, 'even')">Manual</button>
+          <button class="btn small ghost" @click="setSliceMode(true, 'random')">Random</button>
+        </div>
       </div>
     </div>
 
@@ -332,6 +383,37 @@ function knobUp() {
         />
       </div>
 
+      <!-- trim handles (continuous view only) -->
+      <div v-if="state.hasSample && !state.sliceMode" class="trim-overlay">
+        <div class="trim-dim" :style="{ left: 0, width: trimStartPct + '%' }" />
+        <div class="trim-dim" :style="{ left: trimEndPct + '%', right: 0 }" />
+        <div
+          v-if="hasSelection"
+          class="trim-len mono"
+          :style="{ left: (trimStartPct + trimEndPct) / 2 + '%' }"
+        >
+          {{ (state.trimEnd - state.trimStart).toFixed(2) }}s
+        </div>
+        <div
+          class="trim-handle"
+          :style="{ left: trimStartPct + '%' }"
+          @pointerdown="trimDown('start', $event)"
+          @pointermove="trimMove"
+          @pointerup="trimUp"
+        >
+          <span class="grip" />
+        </div>
+        <div
+          class="trim-handle"
+          :style="{ left: trimEndPct + '%' }"
+          @pointerdown="trimDown('end', $event)"
+          @pointermove="trimMove"
+          @pointerup="trimUp"
+        >
+          <span class="grip" />
+        </div>
+      </div>
+
       <div v-if="!state.hasSample" class="empty mono">
         drop a sample to see its waveform
       </div>
@@ -348,6 +430,7 @@ function knobUp() {
               max="2"
               step="0.01"
               :value="state.stretch"
+              @pointerdown="pushHistory"
               @input="setStretch(+($event.target as HTMLInputElement).value)"
             />
             <div class="ticks mono"><span>0.5x</span><span>1x</span><span>2x</span></div>
@@ -403,6 +486,21 @@ function knobUp() {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 10px;
+}
+.editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.btn-group {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding-right: 10px;
+  border-right: 1px solid var(--line);
 }
 .slice-btns {
   display: flex;
@@ -416,6 +514,56 @@ function knobUp() {
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   overflow: hidden;
+}
+/* trim handles + dimmed excluded regions */
+.trim-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.trim-dim {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.55);
+}
+.trim-len {
+  position: absolute;
+  top: 6px;
+  transform: translateX(-50%);
+  font-size: 10px;
+  color: var(--on-accent);
+  background: var(--accent);
+  padding: 1px 7px;
+  border-radius: 100px;
+}
+.trim-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 18px;
+  margin-left: -9px;
+  display: flex;
+  justify-content: center;
+  cursor: ew-resize;
+  pointer-events: auto;
+  touch-action: none;
+}
+.trim-handle::before {
+  content: '';
+  width: 2px;
+  height: 100%;
+  background: var(--accent);
+}
+.trim-handle .grip {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 14px;
+  height: 16px;
+  background: var(--accent);
+  border-radius: 0 0 4px 4px;
 }
 .empty {
   position: absolute;

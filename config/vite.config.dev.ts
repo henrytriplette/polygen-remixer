@@ -1,5 +1,5 @@
 import { defineConfig, mergeConfig, loadEnv } from "vite";
-import common from "./vite.config.base";
+import common from "./vite.config.base.js";
 
 const mode = process.env.NODE_ENV || "development";
 const env = loadEnv(mode, process.cwd(), "");

@@ -5,6 +5,7 @@ import {
   setChannelPan,
   toggleMute,
   toggleSolo,
+  pushHistory,
 } from '../store';
 </script>
 
@@ -32,6 +33,8 @@ import {
             max="1"
             step="0.01"
             :value="c.volume"
+            :aria-label="`${c.name} volume`"
+            @pointerdown="pushHistory"
             @input="setChannelVolume(c.key, +($event.target as HTMLInputElement).value)"
           />
         </div>
@@ -46,6 +49,8 @@ import {
             max="1"
             step="0.02"
             :value="c.pan"
+            :aria-label="`${c.name} pan`"
+            @pointerdown="pushHistory"
             @input="setChannelPan(c.key, +($event.target as HTMLInputElement).value)"
           />
         </div>
@@ -54,6 +59,8 @@ import {
           <button
             class="ms-btn"
             :class="{ on: c.muted }"
+            :aria-label="`Mute ${c.name}`"
+            :aria-pressed="c.muted"
             @click="toggleMute(c.key)"
           >
             M
@@ -61,6 +68,8 @@ import {
           <button
             class="ms-btn solo"
             :class="{ on: c.soloed }"
+            :aria-label="`Solo ${c.name}`"
+            :aria-pressed="c.soloed"
             @click="toggleSolo(c.key)"
           >
             S

@@ -9,11 +9,13 @@ import {
   redo,
   exportWav,
   saveProject,
+  loadProject,
   toggleTheme,
 } from '../store';
 
 const dragging = ref(false);
 const fileInput = ref<HTMLInputElement | null>(null);
+const projectInput = ref<HTMLInputElement | null>(null);
 
 function pick() {
   fileInput.value?.click();
@@ -27,6 +29,11 @@ function onDrop(e: DragEvent) {
   const f = e.dataTransfer?.files?.[0];
   if (f && f.type.startsWith('audio')) loadFile(f);
 }
+function onProjectFile(e: Event) {
+  const file = (e.target as HTMLInputElement).files?.[0];
+  if (file) loadProject(file);
+  (e.target as HTMLInputElement).value = '';
+}
 </script>
 
 <template>
@@ -39,7 +46,12 @@ function onDrop(e: DragEvent) {
     <div
       class="drop"
       :class="{ over: dragging }"
+      role="button"
+      tabindex="0"
+      :aria-label="state.hasSample ? `Replace sample ${state.sampleName}` : 'Upload audio sample'"
       @click="pick"
+      @keydown.enter="pick"
+      @keydown.space.prevent="pick"
       @dragover.prevent="dragging = true"
       @dragleave="dragging = false"
       @drop.prevent="onDrop"
@@ -74,6 +86,13 @@ function onDrop(e: DragEvent) {
       hidden
       @change="onFile"
     />
+    <input
+      ref="projectInput"
+      type="file"
+      accept=".remix.json,application/json"
+      hidden
+      @change="onProjectFile"
+    />
 
     <div class="controls">
       <label class="field">
@@ -84,7 +103,7 @@ function onDrop(e: DragEvent) {
           :value="state.bpm"
           min="40"
           max="220"
-          @input="setBpm(+($event.target as HTMLInputElement).value)"
+          @change="setBpm(+($event.target as HTMLInputElement).value)"
         />
       </label>
       <label class="field">
@@ -114,12 +133,14 @@ function onDrop(e: DragEvent) {
       <div class="divider" />
       <button
         class="btn ghost small theme-toggle"
+        :aria-label="state.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'"
         :title="state.theme === 'dark' ? 'Switch to light' : 'Switch to dark'"
         @click="toggleTheme"
       >
         {{ state.theme === 'dark' ? '◐' : '◑' }}
       </button>
       <button class="btn" @click="exportWav">Export</button>
+      <button class="btn" @click="projectInput?.click()">Load Project</button>
       <button class="btn primary" @click="saveProject">Save Project</button>
     </div>
   </header>

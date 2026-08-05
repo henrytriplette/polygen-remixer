@@ -63,10 +63,10 @@ export function generateBassline() {
 
 export function makeLoFi() {
   pushHistory();
-  setBpm(Math.max(70, Math.round(state.bpm * 0.85)));
-  addEffect('sample', 'bitcrusher');
-  addEffect('sample', 'filter');
-  addEffect('beat', 'compressor');
+  setBpm(Math.max(70, Math.round(state.bpm * 0.85)), false);
+  addEffect('sample', 'bitcrusher', false);
+  addEffect('sample', 'filter', false);
+  addEffect('beat', 'compressor', false);
   // soften hats
   const hat = track('hat');
   hat?.steps.forEach((s) => (s.velocity = Math.min(s.velocity, 0.4)));
@@ -75,7 +75,7 @@ export function makeLoFi() {
 
 export function turnIntoHouse() {
   pushHistory();
-  setBpm(124);
+  setBpm(124, false);
   setPattern('kick', [1, 0, 0, 0], 0.95);
   setPattern('hat', [0, 0, 1, 0], 0.5);
   setPattern('clap', [0, 0, 0, 0, 1, 0, 0, 0], 0.8);
@@ -86,7 +86,7 @@ export function turnIntoHouse() {
 
 export function turnIntoDnB() {
   pushHistory();
-  setBpm(174);
+  setBpm(174, false);
   setPattern('kick', [1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0]);
   setPattern('snare', [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0]);
   setPattern('hat', [1, 0, 1, 0], 0.45);
@@ -95,7 +95,7 @@ export function turnIntoDnB() {
 
 export function turnIntoTrap() {
   pushHistory();
-  setBpm(140);
+  setBpm(140, false);
   setPattern('kick', [1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0]);
   setPattern('snare', [0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]);
   // rolling hats
@@ -113,23 +113,23 @@ export function turnIntoTrap() {
 
 export function makeDarker() {
   pushHistory();
-  addEffect('sample', 'filter');
+  addEffect('sample', 'filter', false);
   const specs = state.channels.find((c) => c.key === 'sample');
   const filt = specs?.effects.find((e) => e.type === 'filter');
   if (filt) setEffectParam('sample', filt.id, 'cutoff', 900);
-  addEffect('sample', 'reverb');
+  addEffect('sample', 'reverb', false);
   toast('Made it darker');
 }
 
 export function makeEnergetic() {
   pushHistory();
-  setBpm(Math.min(180, state.bpm + 8));
+  setBpm(Math.min(180, state.bpm + 8), false);
   const hat = track('hat');
   hat?.steps.forEach((s, i) => {
     s.on = true;
     s.velocity = i % 2 === 0 ? 0.6 : 0.35;
   });
-  addEffect('beat', 'compressor');
+  addEffect('beat', 'compressor', false);
   toast('More energy');
 }
 
