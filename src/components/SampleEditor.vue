@@ -11,8 +11,11 @@ import {
   duplicateSlice,
   toggleSliceReverse,
   setSliceDuration,
+  setSliceStartTime,
+  setSliceEndTime,
   addManualSlice,
   clearSlices,
+  setAutoChopCount,
   playSlicePreview,
   setTrim,
   applyTrim,
@@ -23,7 +26,159 @@ import {
 
 const canvas = ref<HTMLCanvasElement | null>(null);
 const wrap = ref<HTMLDivElement | null>(null);
-const zoom = ref(1);
+const overview = ref<HTMLDivElement | null>(null);
+
+// ---- Waveform viewport (zoom + pan) ----------------------------------------
+// UI-only state: the visible [viewStart, viewEnd] slice of buffer time. Never
+// touches sample data, slice timing, or playback — only what the canvas shows.
+const viewStart = ref(0);
+const viewEnd = ref(0);
+const viewSpan = computed(() => Math.max(1e-6, viewEnd.value - viewStart.value));
+const isZoomed = computed(
+  () => state.duration > 0 && viewSpan.value < state.duration - 1e-4,
+);
+const minSpan = computed(() => Math.max(0.01, state.duration / 1000));
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
+// time (seconds) <-> fraction of the visible viewport (0..1)
+const timeToFrac = (t: number) => (t - viewStart.value) / viewSpan.value;
+const fracToTime = (f: number) => viewStart.value + f * viewSpan.value;
+
+function resetView() {
+  viewStart.value = 0;
+  viewEnd.value = state.duration;
+}
+function zoomAt(anchorFrac: number, factor: number) {
+  if (!state.duration) return;
+  const anchorT = fracToTime(anchorFrac);
+  const span = clamp(viewSpan.value / factor, minSpan.value, state.duration);
+  const start = clamp(anchorT - anchorFrac * span, 0, state.duration - span);
+  viewStart.value = start;
+  viewEnd.value = start + span;
+}
+function panByFrac(df: number) {
+  if (!state.duration) return;
+  const span = viewSpan.value;
+  const start = clamp(viewStart.value + df * span, 0, state.duration - span);
+  viewStart.value = start;
+  viewEnd.value = start + span;
+}
+
+// the packed slice-arrangement view is not buffer-time — zoom only applies to
+// the continuous (trim / manual) waveform, so force a full view there.
+const arrangementView = computed(
+  () => state.sliceMode && !state.manualSlice && state.slices.length > 0,
+);
+watch(arrangementView, (a) => {
+  if (a) resetView();
+});
+// a new / trimmed / reset sample always restores the full-sample viewport
+watch(
+  () => state.duration,
+  () => resetView(),
+  { immediate: true },
+);
+
+function onWheel(e: WheelEvent) {
+  if (!state.duration || arrangementView.value) return; // let the page scroll
+  e.preventDefault();
+  const rect = wrap.value!.getBoundingClientRect();
+  if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+    const delta = e.shiftKey ? e.deltaY : e.deltaX;
+    panByFrac((delta / rect.width) * 0.8);
+  } else {
+    const anchor = clamp((e.clientX - rect.left) / rect.width, 0, 1);
+    zoomAt(anchor, e.deltaY < 0 ? 1.18 : 1 / 1.18);
+  }
+}
+
+// pinch-to-zoom (two pointers) via native capture-phase listeners so it works
+// regardless of the child overlays that capture single pointers
+const activePointers = new Map<number, number>();
+let pinching = false;
+let pinchStartDist = 0;
+let pinchStartStart = 0;
+let pinchStartSpan = 0;
+let pinchMidFrac = 0;
+function pinchDist() {
+  const xs = [...activePointers.values()];
+  return Math.abs(xs[0] - xs[1]);
+}
+function onWrapPointerDown(e: PointerEvent) {
+  activePointers.set(e.pointerId, e.clientX);
+  if (activePointers.size === 2 && !arrangementView.value) {
+    const rect = wrap.value!.getBoundingClientRect();
+    const xs = [...activePointers.values()];
+    pinchStartDist = Math.abs(xs[0] - xs[1]);
+    pinchMidFrac = clamp(((xs[0] + xs[1]) / 2 - rect.left) / rect.width, 0, 1);
+    pinchStartStart = viewStart.value;
+    pinchStartSpan = viewSpan.value;
+    pinching = true;
+    selecting.value = false; // cancel any in-progress draw/trim
+    trimDrag.value = null;
+  }
+}
+function onWrapPointerMove(e: PointerEvent) {
+  if (!activePointers.has(e.pointerId)) return;
+  activePointers.set(e.pointerId, e.clientX);
+  if (pinching && activePointers.size === 2) {
+    e.preventDefault();
+    const ratio = pinchDist() / (pinchStartDist || 1);
+    const span = clamp(pinchStartSpan / ratio, minSpan.value, state.duration);
+    const anchorT = pinchStartStart + pinchMidFrac * pinchStartSpan;
+    const start = clamp(anchorT - pinchMidFrac * span, 0, state.duration - span);
+    viewStart.value = start;
+    viewEnd.value = start + span;
+  }
+}
+function onWrapPointerUp(e: PointerEvent) {
+  activePointers.delete(e.pointerId);
+  if (activePointers.size < 2) pinching = false;
+}
+
+// ---- Overview / pan strip (shown when zoomed) ------------------------------
+const winLeftPct = computed(() =>
+  state.duration ? (viewStart.value / state.duration) * 100 : 0,
+);
+const winWidthPct = computed(() =>
+  state.duration ? (viewSpan.value / state.duration) * 100 : 100,
+);
+let ovDragging = false;
+let ovStartX = 0;
+let ovStartViewStart = 0;
+function ovDown(e: PointerEvent) {
+  if (!overview.value || !state.duration) return;
+  const rect = overview.value.getBoundingClientRect();
+  const clickFrac = clamp((e.clientX - rect.left) / rect.width, 0, 1);
+  const inWindow =
+    clickFrac >= viewStart.value / state.duration &&
+    clickFrac <= viewEnd.value / state.duration;
+  if (!inWindow) {
+    // jump: centre the viewport on the click
+    const start = clamp(
+      clickFrac * state.duration - viewSpan.value / 2,
+      0,
+      state.duration - viewSpan.value,
+    );
+    viewStart.value = start;
+    viewEnd.value = start + viewSpan.value;
+  }
+  ovDragging = true;
+  ovStartX = e.clientX;
+  ovStartViewStart = viewStart.value;
+  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+}
+function ovMove(e: PointerEvent) {
+  if (!ovDragging || !overview.value) return;
+  const rect = overview.value.getBoundingClientRect();
+  const dt = ((e.clientX - ovStartX) / rect.width) * state.duration;
+  const start = clamp(ovStartViewStart + dt, 0, state.duration - viewSpan.value);
+  viewStart.value = start;
+  viewEnd.value = start + viewSpan.value;
+}
+function ovUp() {
+  ovDragging = false;
+}
 
 // Theme-aware slice palette: CSS custom properties that flip in the light theme.
 // The DOM overlay binds `var(--slice-N)`; the canvas resolves the hex at draw
@@ -128,12 +283,14 @@ function draw() {
       ctx.stroke();
     });
   } else {
-    // Continuous buffer view.
+    // Continuous buffer view — map each pixel through the current viewport.
     const n = peaks.length;
+    const dur = state.duration || 1;
     ctx.lineWidth = 1;
     ctx.strokeStyle = waveColor;
     for (let x = 0; x < w; x++) {
-      const idx = Math.floor((x / w) * n);
+      const t = fracToTime(x / w);
+      const idx = Math.min(n - 1, Math.max(0, Math.floor((t / dur) * n)));
       const amp = (peaks[idx] || 0) * (h * 0.46);
       ctx.beginPath();
       ctx.moveTo(x + 0.5, mid - amp);
@@ -142,9 +299,12 @@ function draw() {
     }
   }
 
-  // bar markers
+  const dur = state.duration || 1;
+  // bar markers (positioned in buffer time, through the viewport)
   for (let b = 0; b <= state.bars; b++) {
-    const x = (b / state.bars) * w;
+    const fx = timeToFrac((b / state.bars) * dur);
+    if (fx < -0.001 || fx > 1.001) continue;
+    const x = fx * w;
     ctx.fillStyle = markerLine;
     ctx.fillRect(x, 0, 1, h);
     if (b < state.bars) {
@@ -156,14 +316,17 @@ function draw() {
 
   // playhead
   if (state.currentStep >= 0 && state.totalSteps) {
-    const x = (state.currentStep / state.totalSteps) * w;
-    ctx.fillStyle = playheadColor;
-    ctx.fillRect(x, 0, 2, h);
-    ctx.beginPath();
-    ctx.moveTo(x - 4, 0);
-    ctx.lineTo(x + 6, 0);
-    ctx.lineTo(x + 1, 7);
-    ctx.fill();
+    const fx = timeToFrac((state.currentStep / state.totalSteps) * dur);
+    if (fx >= -0.001 && fx <= 1.001) {
+      const x = fx * w;
+      ctx.fillStyle = playheadColor;
+      ctx.fillRect(x, 0, 2, h);
+      ctx.beginPath();
+      ctx.moveTo(x - 4, 0);
+      ctx.lineTo(x + 6, 0);
+      ctx.lineTo(x + 1, 7);
+      ctx.fill();
+    }
   }
 }
 
@@ -175,6 +338,8 @@ watch(
     state.bars,
     state.wholeReversed,
     state.theme,
+    viewStart.value,
+    viewEnd.value,
     sliceLayout.value,
   ],
   draw,
@@ -185,6 +350,15 @@ let rafId = 0;
 onMounted(() => {
   draw();
   window.addEventListener('resize', draw);
+  // pinch listeners on the waveform, capture phase so they see every pointer
+  const el = wrap.value;
+  if (el) {
+    el.addEventListener('pointerdown', onWrapPointerDown, { capture: true });
+    el.addEventListener('pointermove', onWrapPointerMove, { capture: true });
+    el.addEventListener('pointerup', onWrapPointerUp, { capture: true });
+    el.addEventListener('pointercancel', onWrapPointerUp, { capture: true });
+  }
+  window.addEventListener('keydown', onDeleteKey);
   const loop = () => {
     if (state.playing) draw();
     rafId = requestAnimationFrame(loop);
@@ -193,6 +367,14 @@ onMounted(() => {
 });
 onUnmounted(() => {
   window.removeEventListener('resize', draw);
+  window.removeEventListener('keydown', onDeleteKey);
+  const el = wrap.value;
+  if (el) {
+    el.removeEventListener('pointerdown', onWrapPointerDown, { capture: true });
+    el.removeEventListener('pointermove', onWrapPointerMove, { capture: true });
+    el.removeEventListener('pointerup', onWrapPointerUp, { capture: true });
+    el.removeEventListener('pointercancel', onWrapPointerUp, { capture: true });
+  }
   cancelAnimationFrame(rafId);
 });
 
@@ -326,6 +508,7 @@ const selWidth = computed(() => {
   return (Math.abs(selCurX.value - selStartX.value) / w) * 100;
 });
 function manualDown(e: PointerEvent) {
+  if (pinching || activePointers.size > 1) return;
   if ((e.target as HTMLElement).closest('[data-action]')) return;
   if (!wrap.value) return;
   const rect = wrap.value.getBoundingClientRect();
@@ -335,7 +518,7 @@ function manualDown(e: PointerEvent) {
   (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 }
 function manualMove(e: PointerEvent) {
-  if (!selecting.value || !wrap.value) return;
+  if (pinching || !selecting.value || !wrap.value) return;
   const rect = wrap.value.getBoundingClientRect();
   selCurX.value = Math.min(rect.width, Math.max(0, e.clientX - rect.left));
 }
@@ -343,38 +526,115 @@ function manualUp() {
   if (!selecting.value || !wrap.value) return;
   selecting.value = false;
   const w = wrap.value.clientWidth || 1;
-  const a = (selStartX.value / w) * state.duration;
-  const b = (selCurX.value / w) * state.duration;
+  const a = fracToTime(selStartX.value / w);
+  const b = fracToTime(selCurX.value / w);
   if (Math.abs(selCurX.value - selStartX.value) < 4) {
-    // a click, not a drag → preview whatever slice sits under the cursor
+    // a click, not a drag → select (and preview) the chop under the cursor
     const hit = state.slices.find((sl) => a >= sl.start && a < sl.end);
+    selectedSliceId.value = hit ? hit.id : null;
     if (hit) playSlicePreview(hit.id);
   } else {
     addManualSlice(a, b);
+    // select the freshly-drawn chop (appended last)
+    const created = state.slices[state.slices.length - 1];
+    selectedSliceId.value = created ? created.id : null;
   }
 }
 
+// ---- Selected-chop boundary editing (manual mode) --------------------------
+// selection lives in the store so the sequencer / delete key share it
+const selectedSliceId = computed<string | null>({
+  get: () => state.selectedSliceId,
+  set: (v) => (state.selectedSliceId = v),
+});
+const selectedSlice = computed(
+  () => state.slices.find((s) => s.id === selectedSliceId.value) || null,
+);
+const selectedIndex = computed(() =>
+  state.slices.findIndex((s) => s.id === selectedSliceId.value),
+);
+// selection is only meaningful while manual slicing; drop it otherwise
+watch(
+  () => [state.manualSlice, state.duration],
+  () => {
+    selectedSliceId.value = null;
+  },
+);
+
+const boundDrag = ref<'start' | 'end' | null>(null);
+let boundPushed = false;
+function boundDown(which: 'start' | 'end', e: PointerEvent) {
+  if (pinching || !selectedSlice.value) return;
+  e.stopPropagation();
+  boundDrag.value = which;
+  boundPushed = false;
+  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+}
+function boundMove(e: PointerEvent) {
+  if (pinching || !boundDrag.value || !selectedSlice.value || !wrap.value) return;
+  e.stopPropagation();
+  if (!boundPushed) {
+    pushHistory(); // one undo entry per completed drag
+    boundPushed = true;
+  }
+  const rect = wrap.value.getBoundingClientRect();
+  const t = fracToTime(clamp((e.clientX - rect.left) / rect.width, 0, 1));
+  if (boundDrag.value === 'start') setSliceStartTime(selectedSlice.value.id, t);
+  else setSliceEndTime(selectedSlice.value.id, t);
+}
+function boundUp() {
+  boundDrag.value = null;
+}
+function boundKey(which: 'start' | 'end', e: KeyboardEvent) {
+  const s = selectedSlice.value;
+  if (!s) return;
+  if (e.key === 'Delete' || e.key === 'Backspace') {
+    e.preventDefault();
+    deleteSlice(s.id); // store picks the next selection
+    return;
+  }
+  let dir = 0;
+  if (e.key === 'ArrowLeft') dir = -1;
+  else if (e.key === 'ArrowRight') dir = 1;
+  else return;
+  e.preventDefault();
+  const step = (e.shiftKey ? 0.05 : 0.01) * dir;
+  pushHistory();
+  if (which === 'start') setSliceStartTime(s.id, s.start + step);
+  else setSliceEndTime(s.id, s.end + step);
+  playSlicePreview(s.id);
+}
+
+// global Delete / Backspace removes the selected chop (when not typing)
+function onDeleteKey(e: KeyboardEvent) {
+  if (!state.manualSlice || !state.selectedSliceId) return;
+  if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+  const el = e.target as HTMLElement | null;
+  const tag = el?.tagName;
+  if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || el?.isContentEditable)
+    return;
+  e.preventDefault();
+  deleteSlice(state.selectedSliceId);
+}
+
 // ---- Trim handles ----------------------------------------------------------
-const trimStartPct = computed(() =>
-  state.duration ? (state.trimStart / state.duration) * 100 : 0,
-);
-const trimEndPct = computed(() =>
-  state.duration ? (state.trimEnd / state.duration) * 100 : 100,
-);
+const trimStartPct = computed(() => timeToFrac(state.trimStart) * 100);
+const trimEndPct = computed(() => timeToFrac(state.trimEnd) * 100);
 const hasSelection = computed(
   () => state.trimStart > 0.005 || state.trimEnd < state.duration - 0.005,
 );
 const trimDrag = ref<'start' | 'end' | null>(null);
 function trimDown(which: 'start' | 'end', e: PointerEvent) {
+  if (pinching) return;
   trimDrag.value = which;
   (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
   e.stopPropagation();
 }
 function trimMove(e: PointerEvent) {
-  if (!trimDrag.value || !wrap.value) return;
+  if (pinching || !trimDrag.value || !wrap.value) return;
   const rect = wrap.value.getBoundingClientRect();
   const f = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-  const t = f * state.duration;
+  const t = fracToTime(f);
   if (trimDrag.value === 'start') setTrim(t, state.trimEnd);
   else setTrim(state.trimStart, t);
 }
@@ -453,15 +713,55 @@ function knobUp() {
             Clear
           </button>
         </div>
+
+        <!-- auto chop count (only in the auto/arrangement slice view) -->
+        <div
+          v-if="state.sliceMode && !state.manualSlice"
+          class="chop-count"
+          role="group"
+          aria-label="Automatic chop count"
+        >
+          <span class="cc-label label">Chops</span>
+          <button
+            class="cc-btn"
+            aria-label="Fewer chops"
+            :disabled="state.autoChopCount <= 2"
+            @click="setAutoChopCount(state.autoChopCount - 1)"
+          >
+            −
+          </button>
+          <input
+            class="cc-input mono"
+            type="number"
+            min="2"
+            max="32"
+            aria-label="Number of automatic chops"
+            :value="state.autoChopCount"
+            @change="setAutoChopCount(+($event.target as HTMLInputElement).value)"
+          />
+          <button
+            class="cc-btn"
+            aria-label="More chops"
+            :disabled="state.autoChopCount >= 32"
+            @click="setAutoChopCount(state.autoChopCount + 1)"
+          >
+            +
+          </button>
+        </div>
       </div>
     </div>
 
-    <div
-      ref="wrap"
-      class="wave"
-      @wheel.prevent="zoom = Math.max(1, Math.min(6, zoom + (($event as WheelEvent).deltaY < 0 ? 0.3 : -0.3)))"
-    >
+    <div ref="wrap" class="wave" @wheel="onWheel">
       <canvas ref="canvas" />
+
+      <button
+        v-if="isZoomed"
+        class="zoom-reset btn small"
+        title="Fit whole sample"
+        @click="resetView()"
+      >
+        ⤢ Fit
+      </button>
 
       <!-- draggable slice overlay (arrangement view) -->
       <div
@@ -531,24 +831,68 @@ function knobUp() {
           v-for="(s, i) in state.slices"
           :key="s.id"
           class="manual-region"
+          :class="{ selected: s.id === selectedSliceId }"
           :style="{
-            left: (s.start / state.duration) * 100 + '%',
-            width: ((s.end - s.start) / state.duration) * 100 + '%',
+            left: timeToFrac(s.start) * 100 + '%',
+            width: (timeToFrac(s.end) - timeToFrac(s.start)) * 100 + '%',
             borderColor: sliceCss(i),
-            background: `color-mix(in srgb, ${sliceCss(i)} 16%, transparent)`,
+            background: `color-mix(in srgb, ${sliceCss(i)} ${s.id === selectedSliceId ? 26 : 16}%, transparent)`,
           }"
         >
           <span class="mr-badge mono" :style="{ background: sliceCss(i) }">{{ i + 1 }}</span>
+          <span v-if="s.id === selectedSliceId" class="mr-len mono">
+            {{ (s.end - s.start).toFixed(2) }}s
+          </span>
           <button
             class="mr-del"
             data-action
-            title="Delete slice"
+            :title="`Delete chop ${i + 1}`"
+            :aria-label="`Delete chop ${i + 1}`"
             @pointerdown.stop
             @click="deleteSlice(s.id)"
           >
             ✕
           </button>
         </div>
+
+        <!-- start / end boundary handles for the selected chop -->
+        <template v-if="selectedSlice">
+          <div
+            class="chop-handle"
+            data-action
+            role="slider"
+            tabindex="0"
+            :aria-label="`Chop ${selectedIndex + 1} start`"
+            :aria-valuemin="0"
+            :aria-valuemax="state.duration"
+            :aria-valuenow="selectedSlice.start"
+            :style="{ left: timeToFrac(selectedSlice.start) * 100 + '%' }"
+            @pointerdown="boundDown('start', $event)"
+            @pointermove="boundMove"
+            @pointerup="boundUp"
+            @keydown="boundKey('start', $event)"
+          >
+            <span class="ch-grip" />
+          </div>
+          <div
+            class="chop-handle end"
+            data-action
+            role="slider"
+            tabindex="0"
+            :aria-label="`Chop ${selectedIndex + 1} end`"
+            :aria-valuemin="0"
+            :aria-valuemax="state.duration"
+            :aria-valuenow="selectedSlice.end"
+            :style="{ left: timeToFrac(selectedSlice.end) * 100 + '%' }"
+            @pointerdown="boundDown('end', $event)"
+            @pointermove="boundMove"
+            @pointerup="boundUp"
+            @keydown="boundKey('end', $event)"
+          >
+            <span class="ch-grip" />
+          </div>
+        </template>
+
         <div
           v-if="selecting"
           class="manual-sel"
@@ -590,6 +934,21 @@ function knobUp() {
       <div v-if="!state.hasSample" class="empty mono">
         drop a sample to see its waveform
       </div>
+    </div>
+
+    <!-- overview / pan strip (only while zoomed in) -->
+    <div
+      v-if="isZoomed"
+      ref="overview"
+      class="wave-overview"
+      @pointerdown="ovDown"
+      @pointermove="ovMove"
+      @pointerup="ovUp"
+    >
+      <div
+        class="ov-window"
+        :style="{ left: winLeftPct + '%', width: winWidthPct + '%' }"
+      />
     </div>
 
     <div class="controls">
@@ -683,6 +1042,47 @@ function knobUp() {
   display: flex;
   gap: 6px;
 }
+.chop-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.cc-label {
+  margin-right: 2px;
+}
+.cc-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-pill);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+}
+.cc-btn:hover:not(:disabled) {
+  border-color: var(--line-strong);
+}
+.cc-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.cc-input {
+  width: 42px;
+  text-align: center;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  padding: 4px 4px;
+  font-size: 12px;
+  outline: none;
+}
+.cc-input:focus {
+  border-color: var(--cyan);
+}
 .wave {
   position: relative;
   flex: 1;
@@ -691,6 +1091,49 @@ function knobUp() {
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   overflow: hidden;
+  /* let a single-finger vertical swipe scroll the page, but reserve pinch +
+     horizontal gestures for our zoom/pan handlers */
+  touch-action: pan-y;
+}
+/* "Fit" button to reset the zoom, floating top-right of the waveform */
+.zoom-reset {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 8;
+  background: color-mix(in srgb, var(--panel) 82%, transparent);
+  backdrop-filter: blur(4px);
+}
+/* overview / pan strip under the waveform */
+.wave-overview {
+  position: relative;
+  height: 26px;
+  background: var(--well);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  overflow: hidden;
+  touch-action: none;
+  background-image: repeating-linear-gradient(
+    90deg,
+    var(--line) 0,
+    var(--line) 1px,
+    transparent 1px,
+    transparent 12.5%
+  );
+}
+.ov-window {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  min-width: 8px;
+  background: color-mix(in srgb, var(--cyan) 20%, transparent);
+  border: 1px solid var(--cyan);
+  border-radius: 4px;
+  cursor: grab;
+}
+.ov-window:active {
+  cursor: grabbing;
 }
 /* manual slicing: draw regions on the continuous waveform */
 .manual-overlay {
@@ -706,6 +1149,69 @@ function knobUp() {
   border-left: 2px solid transparent;
   border-right: 2px solid transparent;
   pointer-events: none;
+}
+.manual-region.selected {
+  box-shadow: inset 0 0 0 2px var(--text-bright);
+  z-index: 2;
+}
+.mr-len {
+  position: absolute;
+  top: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 1px 6px;
+  border-radius: 100px;
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--on-hue);
+  background: var(--text-bright);
+  pointer-events: none;
+  white-space: nowrap;
+}
+/* draggable start/end boundary handles for the selected chop */
+.chop-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 20px;
+  margin-left: -10px;
+  display: flex;
+  justify-content: center;
+  cursor: ew-resize;
+  pointer-events: auto;
+  touch-action: none;
+  z-index: 5;
+}
+.chop-handle::before {
+  content: '';
+  width: 2px;
+  height: 100%;
+  background: var(--text-bright);
+}
+.chop-handle:focus-visible {
+  outline: none;
+}
+.chop-handle:focus-visible::before {
+  background: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.ch-grip {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 14px;
+  height: 16px;
+  background: var(--text-bright);
+  border-radius: 4px 4px 0 0;
+}
+.chop-handle.end .ch-grip {
+  bottom: auto;
+  top: 0;
+  border-radius: 0 0 4px 4px;
+}
+.chop-handle:focus-visible .ch-grip {
+  background: var(--accent);
 }
 .mr-badge {
   position: absolute;
@@ -739,7 +1245,8 @@ function knobUp() {
   opacity: 0;
   transition: opacity 0.12s;
 }
-.manual-region:hover .mr-del {
+.manual-region:hover .mr-del,
+.manual-region.selected .mr-del {
   opacity: 1;
 }
 .mr-del:hover {

@@ -5,9 +5,18 @@
 import { reactive, watch } from 'vue';
 import { engine } from './audio/engine';
 import { Channel } from './audio/channel';
-import { SamplePlayer, makeSlices, evenSlices, nextSliceId, cropBuffer } from './audio/sample';
+import {
+  SamplePlayer,
+  evenSlices,
+  autoSlices,
+  transientChopCount,
+  nextSliceId,
+  cropBuffer,
+  MIN_AUTO_CHOPS,
+  MAX_AUTO_CHOPS,
+} from './audio/sample';
 import type { Slice } from './audio/sample';
-import { Synth, noteId } from './audio/synth';
+import { Synth, noteId, DEFAULT_INSTRUMENT, instrumentById, instrumentForWave } from './audio/synth';
 import type { Note } from './audio/synth';
 import { DRUM_LIBRARY, playDrum } from './audio/drums';
 import type { DrumPreset, DrumVoice } from './audio/drums';
@@ -51,6 +60,8 @@ interface State {
   sampleGrid: boolean[][]; // sample step sequencer: [sliceIndex][step] on/off
   sliceMode: boolean;
   manualSlice: boolean; // draw-your-own-region slicing mode
+  selectedSliceId: string | null; // chop selected for boundary editing / delete
+  autoChopCount: number; // requested number of chops in auto slice mode
   trimStart: number; // seconds — start of the active/selection region
   trimEnd: number; // seconds — end of the active/selection region
   trimmed: boolean; // has the buffer been cropped from the original?
@@ -68,7 +79,8 @@ interface State {
   // sequencer / instruments
   drums: DrumTrack[];
   notes: Note[];
-  synthWave: string;
+  synthWave: string; // legacy base wave, kept for project back-compat
+  instrument: string; // active melody instrument id
   // mixer
   channels: UiChannel[];
   // ui
@@ -104,6 +116,8 @@ export const state = reactive<State>({
   sampleGrid: [],
   sliceMode: false,
   manualSlice: false,
+  selectedSliceId: null,
+  autoChopCount: 8,
   trimStart: 0,
   trimEnd: 0,
   trimmed: false,
@@ -125,6 +139,7 @@ export const state = reactive<State>({
   ],
   notes: [],
   synthWave: 'sawtooth',
+  instrument: DEFAULT_INSTRUMENT,
   channels: CHANNEL_DEFS.map((c) => ({
     ...c,
     volume: 0.8,
@@ -225,7 +240,7 @@ function initAudio() {
   Object.assign(channels, createConfiguredChannels(ctx, engine.master));
   samplePlayer = new SamplePlayer(ctx, channels.sample.input);
   bassSynth = new Synth(ctx, channels.bass.input);
-  bassSynth.wave = state.synthWave as Synth['wave'];
+  bassSynth.setInstrument(state.instrument);
 
   engine.onStep((step, time) => scheduleStep(step, time));
   engine.onVisualStep = (s) => (state.currentStep = s);
@@ -260,7 +275,7 @@ function rebuildAudioGraph() {
   Object.assign(channels, createConfiguredChannels(ctx, engine.master));
   samplePlayer = new SamplePlayer(ctx, channels.sample.input);
   bassSynth = new Synth(ctx, channels.bass.input);
-  bassSynth.wave = state.synthWave as Synth['wave'];
+  bassSynth.setInstrument(state.instrument);
   if (buffer) samplePlayer.load(buffer);
   applySampleParams();
 }
@@ -317,6 +332,8 @@ function snapshot(): Snapshot {
     notes: state.notes,
     sampleGrid: state.sampleGrid,
     slices: state.slices,
+    selectedSliceId: state.selectedSliceId,
+    autoChopCount: state.autoChopCount,
     pitch: state.pitch,
     stretch: state.stretch,
     wholeReversed: state.wholeReversed,
@@ -326,6 +343,7 @@ function snapshot(): Snapshot {
     loop: state.loop,
     metronome: state.metronome,
     synthWave: state.synthWave,
+    instrument: state.instrument,
     channels: state.channels.map(({ meter: _meter, ...channel }) => channel),
   });
 }
@@ -344,6 +362,8 @@ function restore(snap: Snapshot) {
   state.notes = s.notes;
   state.sampleGrid = s.sampleGrid;
   state.slices = s.slices;
+  state.selectedSliceId = s.selectedSliceId ?? null;
+  if (typeof s.autoChopCount === 'number') state.autoChopCount = s.autoChopCount;
   state.pitch = s.pitch;
   state.stretch = s.stretch;
   state.wholeReversed = s.wholeReversed;
@@ -353,6 +373,8 @@ function restore(snap: Snapshot) {
   state.loop = s.loop;
   state.metronome = s.metronome;
   state.synthWave = s.synthWave;
+  state.instrument = s.instrument ?? instrumentForWave(s.synthWave);
+  bassSynth?.setInstrument(state.instrument);
   state.channels = s.channels.map((channel: Omit<UiChannel, 'meter'>) => ({ ...channel, meter: 0 }));
   engine.bpm = state.bpm;
   engine.bars = state.bars;
@@ -402,8 +424,9 @@ export async function loadFile(file: File) {
     state.trimStart = 0;
     state.trimEnd = a.duration;
     state.trimmed = false;
-    // default: one auto-slice pass so the sample is immediately playable
-    state.slices = makeSlices(a.transients, a.duration);
+    // default chop count follows the detected transients, then auto-slice
+    state.autoChopCount = transientChopCount(a.transients, a.duration);
+    state.slices = autoSlices(a.transients, state.peaks, a.duration, state.autoChopCount);
     distributeSlices();
     state.hasSample = true;
     state.ready = true;
@@ -467,8 +490,10 @@ function loadBuffer(buffer: AudioBuffer, trimmed: boolean) {
   state.key = a.key;
   setBpm(a.bpm, false);
   (state as any)._transients = a.transients;
-  state.slices = makeSlices(a.transients, a.duration);
+  state.autoChopCount = transientChopCount(a.transients, a.duration);
+  state.slices = autoSlices(a.transients, state.peaks, a.duration, state.autoChopCount);
   if (state.wholeReversed) state.slices.forEach((s) => (s.reversed = true));
+  state.selectedSliceId = null;
   state.trimStart = 0;
   state.trimEnd = a.duration;
   state.trimmed = trimmed;
@@ -521,7 +546,13 @@ export function deleteSlice(id: string) {
   if (i < 0) return;
   pushHistory();
   state.slices.splice(i, 1);
-  state.sampleGrid.splice(i, 1);
+  state.sampleGrid.splice(i, 1); // keep the sequencer row aligned with the chop
+  // move selection to a sensible neighbour (or clear on the last chop)
+  if (state.selectedSliceId === id) {
+    state.selectedSliceId = state.slices.length
+      ? state.slices[Math.min(i, state.slices.length - 1)].id
+      : null;
+  }
 }
 
 export function duplicateSlice(id: string) {
@@ -551,6 +582,23 @@ export function setSliceDuration(index: number, dur: number) {
   s.end = s.start + Math.max(0.02, Math.min(dur, maxDur));
 }
 
+const MIN_SLICE = 0.02; // minimum chop length, seconds
+
+/** Move a slice's start edge. Independent per chop: clamped to [0, end-min].
+ *  History is managed by the caller (once per drag / keypress). */
+export function setSliceStartTime(id: string, t: number) {
+  const s = state.slices.find((x) => x.id === id);
+  if (!s) return;
+  s.start = Math.max(0, Math.min(t, s.end - MIN_SLICE));
+}
+
+/** Move a slice's end edge. Clamped to [start+min, sampleDuration]. */
+export function setSliceEndTime(id: string, t: number) {
+  const s = state.slices.find((x) => x.id === id);
+  if (!s) return;
+  s.end = Math.min(state.duration, Math.max(t, s.start + MIN_SLICE));
+}
+
 /** Audition a single slice (click-to-preview in the editor). */
 export function playSlicePreview(id: string) {
   initAudio();
@@ -573,14 +621,41 @@ export function setSliceMode(on: boolean, kind: 'auto' | 'random' | 'manual' = '
   }
   state.manualSlice = false;
   pushHistory();
+  state.selectedSliceId = null;
   const trans = (state as any)._transients || [];
-  if (kind === 'auto') state.slices = makeSlices(trans, state.duration);
-  else {
+  if (kind === 'auto') {
+    state.slices = autoSlices(trans, state.peaks, state.duration, state.autoChopCount);
+  } else {
     // random glitch chops
     const n = 8 + Math.floor(Math.random() * 12);
     state.slices = evenSlices(state.duration, n).sort(() => Math.random() - 0.5);
   }
   distributeSlices();
+}
+
+/**
+ * Set the requested number of auto chops (2–32) and, when auto-slicing is the
+ * active view, regenerate the chops at that count. Migration policy: the sample
+ * sequencer is **redistributed** to the default one-hit-per-chop pattern, since
+ * the chop set has changed and old per-chop step edits no longer map. One call =
+ * one undo entry.
+ */
+export function setAutoChopCount(count: number) {
+  count = Math.max(MIN_AUTO_CHOPS, Math.min(MAX_AUTO_CHOPS, Math.round(count)));
+  if (count === state.autoChopCount) return;
+  // re-chop when the auto (arrangement) view is active — one undo entry that
+  // captures the previous count AND slices before we change them
+  if (state.sliceMode && !state.manualSlice && state.hasSample) {
+    pushHistory();
+    state.autoChopCount = count;
+    state.selectedSliceId = null;
+    const trans = (state as any)._transients || [];
+    state.slices = autoSlices(trans, state.peaks, state.duration, count);
+    distributeSlices();
+  } else {
+    // otherwise just remember the preference for the next auto slice
+    state.autoChopCount = count;
+  }
 }
 
 /** Manual slicing: add a slice for a hand-drawn [start, end] buffer region. */
@@ -664,11 +739,21 @@ export function removeNote(id: string) {
   pushHistory();
   state.notes = state.notes.filter((n) => n.id !== id);
 }
-export function setSynthWave(w: string, recordHistory = true) {
-  if (state.synthWave === w) return;
+/** Remove every melody note in one undoable action (piano-roll Clear). */
+export function clearNotes() {
+  if (!state.notes.length) return;
+  pushHistory();
+  state.notes = [];
+  toast('Melody cleared — undo to restore');
+}
+/** Set the melody instrument (project-wide). One undo entry per committed change. */
+export function setInstrument(id: string, recordHistory = true) {
+  const inst = instrumentById(id);
+  if (state.instrument === inst.id) return;
   if (recordHistory) pushHistory();
-  state.synthWave = w;
-  if (bassSynth) bassSynth.wave = w as any;
+  state.instrument = inst.id;
+  state.synthWave = inst.wave; // keep legacy field valid for save/back-compat
+  bassSynth?.setInstrument(inst.id);
 }
 
 // sample params
@@ -812,17 +897,28 @@ export function reorderEffect(channelKey: string, from: number, to: number) {
 export { EFFECT_PARAM_SPECS };
 
 // performance pads
-export function triggerPad(index: number) {
+// Performance-pad keyboard bindings, shared by the pad grid and the global key
+// handler. Chops beyond CHOP_PAD_KEYS.length have no key (pointer/touch only).
+export const CHOP_PAD_KEYS = [
+  '1', '2', '3', '4', '5', '6', '7', '8', '9', '0',
+  'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p',
+];
+export const DRUM_PAD_KEYS = ['a', 's', 'd', 'f'];
+
+/** Trigger a sample chop by index with low latency (used by pads + keys). */
+export function triggerChop(index: number) {
+  const s = state.slices[index];
+  if (!s) return;
   initAudio();
   const ctx = engine.ensure();
   if (ctx.state === 'suspended') ctx.resume();
-  const t = ctx.currentTime + 0.005;
-  if (index < 4 && state.slices[index]) {
-    samplePlayer!.playSlice(state.slices[index], t);
-  } else {
-    const drum = state.drums[index % state.drums.length];
-    playDrum(ctx, channels.beat.input, presetById(drum.voice, drum.presetId), t);
-  }
+  samplePlayer!.playSlice(s, ctx.currentTime + 0.005);
+}
+
+/** Trigger a drum pad by index (Kick / Snare / Hat / Clap). */
+export function triggerDrumPad(index: number) {
+  const d = state.drums[index];
+  if (d) auditionDrum(d.voice, d.presetId);
 }
 
 // meters — polled by the UI on a rAF loop
@@ -884,7 +980,7 @@ export async function exportWav() {
   offSample.rate = state.stretch;
   offSample.wholeReversed = state.wholeReversed;
   const offSynth = new Synth(offline, offChans.bass.input);
-  offSynth.wave = state.synthWave as Synth['wave'];
+  offSynth.setInstrument(state.instrument);
 
   for (let loop = 0; loop < loops; loop++) {
     for (let step = 0; step < state.totalSteps; step++) {
@@ -942,10 +1038,12 @@ export async function saveProject() {
     notes: state.notes,
     slices: state.slices,
     sampleGrid: state.sampleGrid,
+    autoChopCount: state.autoChopCount,
     pitch: state.pitch,
     stretch: state.stretch,
     wholeReversed: state.wholeReversed,
     synthWave: state.synthWave,
+    instrument: state.instrument,
     channels: state.channels.map(({ key, volume, pan, muted, soloed, effects }) => ({
       key, volume, pan, muted, soloed, effects,
     })),
@@ -983,10 +1081,16 @@ export async function loadProject(file: File) {
     state.notes = parsed.notes;
     state.slices = parsed.slices;
     state.sampleGrid = parsed.sampleGrid;
+    state.autoChopCount =
+      parsed.autoChopCount ??
+      transientChopCount(restoredAnalysis.transients, buffer.duration);
+    (state as any)._transients = restoredAnalysis.transients;
+    state.selectedSliceId = null;
     state.pitch = parsed.pitch;
     state.stretch = parsed.stretch;
     state.wholeReversed = parsed.wholeReversed;
     state.synthWave = parsed.synthWave;
+    state.instrument = parsed.instrument ?? instrumentForWave(parsed.synthWave);
     state.channels = parsed.channels.map((saved) => ({
       ...saved,
       name: CHANNEL_DEFS.find((channel) => channel.key === saved.key)?.name ?? saved.key,

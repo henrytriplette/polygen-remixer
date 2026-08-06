@@ -49,6 +49,79 @@ export function evenSlices(duration: number, count: number): Slice[] {
   return slices;
 }
 
+export const MIN_AUTO_CHOPS = 2;
+export const MAX_AUTO_CHOPS = 32;
+
+/** How many chops a plain transient slice would yield (clamped to the range). */
+export function transientChopCount(transients: number[], duration: number): number {
+  const internal = transients.filter((t) => t > 0.02 && t < duration - 0.02).length;
+  return Math.max(MIN_AUTO_CHOPS, Math.min(MAX_AUTO_CHOPS, internal + 1));
+}
+
+/**
+ * Produce exactly `count` transient-aware chops. When there are more detected
+ * transients than needed, keep the strongest (by waveform peak at that time);
+ * when there are too few, fill by repeatedly splitting the widest gap. Result is
+ * ordered, gap-free and covers [0, duration].
+ */
+export function autoSlices(
+  transients: number[],
+  peaks: ArrayLike<number>,
+  duration: number,
+  count: number,
+): Slice[] {
+  count = Math.max(MIN_AUTO_CHOPS, Math.min(MAX_AUTO_CHOPS, Math.floor(count)));
+  const need = count - 1; // internal boundaries
+  const N = peaks.length || 1;
+  const strengthAt = (t: number) => {
+    const idx = Math.min(N - 1, Math.max(0, Math.floor((t / duration) * N)));
+    return peaks[idx] || 0;
+  };
+
+  let internal = transients
+    .filter((t) => t > 0.02 && t < duration - 0.02)
+    .sort((a, b) => a - b);
+
+  if (internal.length > need) {
+    // keep the strongest `need` onsets, then restore time order
+    internal = internal
+      .map((t) => ({ t, s: strengthAt(t) }))
+      .sort((a, b) => b.s - a.s)
+      .slice(0, need)
+      .map((o) => o.t)
+      .sort((a, b) => a - b);
+  } else if (internal.length < need) {
+    const bounds = [0, ...internal, duration];
+    while (bounds.length - 2 < need) {
+      let wi = 0;
+      let widest = -1;
+      for (let i = 0; i < bounds.length - 1; i++) {
+        const gap = bounds[i + 1] - bounds[i];
+        if (gap > widest) {
+          widest = gap;
+          wi = i;
+        }
+      }
+      bounds.splice(wi + 1, 0, (bounds[wi] + bounds[wi + 1]) / 2);
+    }
+    internal = bounds.slice(1, -1);
+  }
+
+  const pts = [0, ...internal, duration];
+  const slices: Slice[] = [];
+  for (let i = 0; i < pts.length - 1; i++) {
+    slices.push({
+      id: sid(),
+      start: pts[i],
+      end: pts[i + 1],
+      pitch: 0,
+      reversed: false,
+      gain: 1,
+    });
+  }
+  return slices;
+}
+
 export function reverseBuffer(ctx: BaseAudioContext, buf: AudioBuffer): AudioBuffer {
   const out = ctx.createBuffer(buf.numberOfChannels, buf.length, buf.sampleRate);
   for (let c = 0; c < buf.numberOfChannels; c++) {

@@ -53,6 +53,8 @@ export interface ProjectFileV2 {
   wholeReversed: boolean;
   synthWave: string;
   channels: SavedChannel[];
+  autoChopCount?: number; // optional: added after v2, older files still load
+  instrument?: string; // optional: melody instrument id, older files fall back
 }
 
 const EFFECT_TYPES: readonly EffectType[] = [
@@ -84,6 +86,9 @@ export function isProjectFile(value: unknown): value is ProjectFileV2 {
     !isNumber(value.stretch) ||
     typeof value.wholeReversed !== 'boolean' ||
     typeof value.synthWave !== 'string' || !SYNTH_WAVES.includes(value.synthWave) ||
+    (value.instrument !== undefined && typeof value.instrument !== 'string') ||
+    (value.autoChopCount !== undefined &&
+      (!isNumber(value.autoChopCount) || value.autoChopCount < 2 || value.autoChopCount > 32)) ||
     !Array.isArray(value.drums) || !Array.isArray(value.notes) ||
     !Array.isArray(value.slices) || !Array.isArray(value.sampleGrid) ||
     !Array.isArray(value.channels)

@@ -5,7 +5,7 @@ import {
   state,
   pushHistory,
   setBpm,
-  setSynthWave,
+  setInstrument,
   addEffect,
   setEffectParam,
   toast,
@@ -57,7 +57,7 @@ export function generateBassline() {
       velocity: 0.8,
     });
   }
-  setSynthWave('sawtooth');
+  setInstrument('bass', false);
   toast('Generated a bassline');
 }
 

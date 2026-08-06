@@ -5,6 +5,7 @@ import {
   clearSampleGrid,
   distributeSlices,
   playSlicePreview,
+  deleteSlice,
 } from '../store';
 
 // slice colours mirror the Sample Editor's theme-aware palette
@@ -36,6 +37,14 @@ const sliceColor = (i: number) => `var(--slice-${(i % 6) + 1})`;
         >
           <span class="ss-dot" :style="{ background: sliceColor(i) }" />
           Chop {{ i + 1 }}
+        </button>
+        <button
+          class="ss-del"
+          :title="`Delete chop ${i + 1}`"
+          :aria-label="`Delete chop ${i + 1}`"
+          @click="deleteSlice(slice.id)"
+        >
+          ✕
         </button>
         <div class="ss-steps">
           <button
@@ -117,6 +126,29 @@ const sliceColor = (i: number) => `var(--slice-${(i % 6) + 1})`;
   border-radius: 50%;
   flex-shrink: 0;
 }
+.ss-del {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  margin-right: 8px;
+  border-radius: 5px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--text-mute);
+  font-size: 10px;
+  display: grid;
+  place-items: center;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.ss-row:hover .ss-del,
+.ss-del:focus-visible {
+  opacity: 1;
+}
+.ss-del:hover {
+  color: var(--red);
+  border-color: var(--red);
+}
 .ss-steps {
   display: flex;
   gap: 5px;
@@ -161,6 +193,9 @@ const sliceColor = (i: number) => `var(--slice-${(i % 6) + 1})`;
   .ss-name {
     width: 78px;
     font-size: 11px;
+  }
+  .ss-del {
+    opacity: 1;
   }
 }
 </style>

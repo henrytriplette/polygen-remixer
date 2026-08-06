@@ -10,7 +10,15 @@ import Mixer from './components/Mixer.vue';
 import TransportControls from './components/TransportControls.vue';
 import RemixPanel from './components/RemixPanel.vue';
 import PerformanceMode from './components/PerformanceMode.vue';
-import { state, togglePlay, pollMeters, triggerPad, auditionDrum } from './store';
+import {
+  state,
+  togglePlay,
+  pollMeters,
+  triggerChop,
+  triggerDrumPad,
+  CHOP_PAD_KEYS,
+  DRUM_PAD_KEYS,
+} from './store';
 
 const workspaces = [
   { key: 'beat' as const, label: 'Beat', accent: 'var(--orange)' },
@@ -21,12 +29,12 @@ const workspaces = [
 ];
 
 // keyboard: space transport, pad keys for performance / quick audition
-const PAD_KEYS: Record<string, number> = {
-  '1': 0, '2': 1, '3': 2, '4': 3,
-  q: 4, w: 5, e: 6, r: 7,
-};
-// A S D F audition the 4 drum tracks (spec's drum-pad row)
-const DRUM_KEYS: Record<string, number> = { a: 0, s: 1, d: 2, f: 3 };
+const chopKeyIndex: Record<string, number> = Object.fromEntries(
+  CHOP_PAD_KEYS.map((k, i) => [k, i]),
+);
+const drumKeyIndex: Record<string, number> = Object.fromEntries(
+  DRUM_PAD_KEYS.map((k, i) => [k, i]),
+);
 
 function onKey(e: KeyboardEvent) {
   const tag = (e.target as HTMLElement)?.tagName;
@@ -37,12 +45,8 @@ function onKey(e: KeyboardEvent) {
     return;
   }
   const k = e.key.toLowerCase();
-  if (k in PAD_KEYS) {
-    triggerPad(PAD_KEYS[k]);
-  } else if (k in DRUM_KEYS) {
-    const t = state.drums[DRUM_KEYS[k]];
-    if (t) auditionDrum(t.voice, t.presetId);
-  }
+  if (k in chopKeyIndex) triggerChop(chopKeyIndex[k]);
+  else if (k in drumKeyIndex) triggerDrumPad(drumKeyIndex[k]);
 }
 
 let raf = 0;
