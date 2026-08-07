@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, computed, onUnmounted } from 'vue';
 import {
   state,
   loadFile,
@@ -11,7 +11,18 @@ import {
   saveProject,
   loadProject,
   toggleTheme,
+  startRecording,
+  stopRecording,
+  cancelRecording,
+  dismissRecError,
+  disposeRecording,
+  MAX_REC_SECONDS,
 } from '../store';
+
+const fmtTime = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+const elapsedLabel = computed(() => fmtTime(state.recElapsed));
+const maxLabel = fmtTime(MAX_REC_SECONDS);
+onUnmounted(() => disposeRecording());
 
 const dragging = ref(false);
 const fileInput = ref<HTMLInputElement | null>(null);
@@ -93,6 +104,47 @@ function onProjectFile(e: Event) {
       hidden
       @change="onProjectFile"
     />
+
+    <!-- microphone recording -->
+    <div class="rec" :class="`rec-${state.recStatus}`">
+      <button
+        v-if="state.recStatus === 'idle'"
+        class="btn rec-btn"
+        aria-label="Record a sample from the microphone"
+        @click="startRecording"
+      >
+        <span class="rec-dot" /> Rec
+      </button>
+      <span v-else-if="state.recStatus === 'requesting'" class="rec-msg mono">
+        requesting mic…
+      </span>
+      <template v-else-if="state.recStatus === 'recording'">
+        <span class="rec-time mono" role="timer" aria-live="polite">
+          <span class="rec-dot live" /> {{ elapsedLabel }}
+          <i class="dim">/ {{ maxLabel }}</i>
+        </span>
+        <button
+          class="btn small rec-stop"
+          aria-label="Stop recording and use it as the sample"
+          @click="stopRecording"
+        >
+          ■ Stop
+        </button>
+        <button class="btn small ghost" aria-label="Cancel recording" @click="cancelRecording">
+          Cancel
+        </button>
+      </template>
+      <template v-else-if="state.recStatus === 'error'">
+        <span class="rec-err mono" role="alert">{{ state.recError }}</span>
+        <button
+          class="btn small ghost"
+          aria-label="Dismiss recording error"
+          @click="dismissRecError"
+        >
+          ✕
+        </button>
+      </template>
+    </div>
 
     <div class="controls">
       <label class="field">
@@ -268,6 +320,56 @@ function onProjectFile(e: Event) {
   background: var(--line);
 }
 
+/* microphone recording control */
+.rec {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.rec-btn {
+  gap: 7px;
+}
+.rec-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+.rec-dot.live {
+  box-shadow: 0 0 8px var(--accent-glow);
+  animation: rec-blink 1s steps(2, start) infinite;
+}
+@keyframes rec-blink {
+  50% {
+    opacity: 0.3;
+  }
+}
+.rec-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--accent);
+}
+.rec-time i {
+  font-style: normal;
+}
+.rec-stop {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.rec-msg {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.rec-err {
+  font-size: 11px;
+  color: var(--accent);
+  max-width: 220px;
+}
+
 @media (max-width: 820px) {
   .toolbar {
     flex-wrap: wrap;
@@ -282,6 +384,10 @@ function onProjectFile(e: Event) {
     order: 3;
     flex-basis: 100%;
     min-width: 0;
+  }
+  .rec {
+    order: 4;
+    flex-wrap: wrap;
   }
   .controls {
     order: 2;

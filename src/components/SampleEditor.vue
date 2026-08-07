@@ -5,6 +5,7 @@ import {
   setSliceMode,
   setPitch,
   setStretch,
+  setSampleGain,
   reverseSample,
   moveSlice,
   deleteSlice,
@@ -643,6 +644,11 @@ function trimUp() {
 }
 
 const pitchAngle = computed(() => (state.pitch / 12) * 135);
+const gainDb = computed(() => {
+  if (state.sampleGain <= 0) return '−∞';
+  const db = 20 * Math.log10(state.sampleGain);
+  return (db >= 0 ? '+' : '') + db.toFixed(1);
+});
 let knobDrag = false;
 let startY = 0;
 let startPitch = 0;
@@ -970,6 +976,26 @@ function knobUp() {
         </div>
       </div>
 
+      <div class="ctl stretch">
+        <span class="label">Gain · {{ state.sampleGain.toFixed(2) }}× ({{ gainDb }} dB)</span>
+        <div class="ctl-body">
+          <div class="stretch-slider">
+            <input
+              type="range"
+              min="0"
+              max="4"
+              step="0.05"
+              :value="state.sampleGain"
+              aria-label="Sample gain"
+              @pointerdown="pushHistory"
+              @dblclick="setSampleGain(1)"
+              @input="setSampleGain(+($event.target as HTMLInputElement).value)"
+            />
+            <div class="ticks mono"><span>0×</span><span>1×</span><span>4×</span></div>
+          </div>
+        </div>
+      </div>
+
       <div class="ctl">
         <span class="label">Pitch</span>
         <div class="ctl-body">
@@ -1094,6 +1120,13 @@ function knobUp() {
   /* let a single-finger vertical swipe scroll the page, but reserve pinch +
      horizontal gestures for our zoom/pan handlers */
   touch-action: pan-y;
+}
+/* take the canvas out of flow so its measured height can't feed back into the
+   container height (which caused the waveform to grow every frame on mobile) */
+.wave canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
 }
 /* "Fit" button to reset the zoom, floating top-right of the waveform */
 .zoom-reset {
@@ -1535,6 +1568,11 @@ function knobUp() {
   .head {
     flex-wrap: wrap;
     gap: 8px;
+  }
+  /* a taller, more usable waveform on phones (canvas is absolute, so this is a
+     stable floor with no feedback growth) */
+  .wave {
+    min-height: 200px;
   }
   .slice-btns {
     flex-wrap: wrap;

@@ -51,6 +51,10 @@ interface State {
   sampleName: string;
   hasSample: boolean;
   analyzing: boolean;
+  // microphone recording
+  recStatus: 'idle' | 'requesting' | 'recording' | 'error';
+  recElapsed: number; // seconds
+  recError: string;
   originalBpm: number;
   key: string;
   duration: number;
@@ -66,6 +70,7 @@ interface State {
   trimEnd: number; // seconds — end of the active/selection region
   trimmed: boolean; // has the buffer been cropped from the original?
   stretch: number;
+  sampleGain: number; // makeup gain for the sample (0–4×)
   pitch: number;
   wholeReversed: boolean;
   // transport
@@ -107,6 +112,9 @@ export const state = reactive<State>({
   sampleName: '',
   hasSample: false,
   analyzing: false,
+  recStatus: 'idle',
+  recElapsed: 0,
+  recError: '',
   originalBpm: 0,
   key: '—',
   duration: 0,
@@ -122,6 +130,7 @@ export const state = reactive<State>({
   trimEnd: 0,
   trimmed: false,
   stretch: 1,
+  sampleGain: 1,
   pitch: 0,
   wholeReversed: false,
   playing: false,
@@ -336,6 +345,7 @@ function snapshot(): Snapshot {
     autoChopCount: state.autoChopCount,
     pitch: state.pitch,
     stretch: state.stretch,
+    sampleGain: state.sampleGain,
     wholeReversed: state.wholeReversed,
     bpm: state.bpm,
     bars: state.bars,
@@ -366,6 +376,7 @@ function restore(snap: Snapshot) {
   if (typeof s.autoChopCount === 'number') state.autoChopCount = s.autoChopCount;
   state.pitch = s.pitch;
   state.stretch = s.stretch;
+  if (typeof s.sampleGain === 'number') state.sampleGain = s.sampleGain;
   state.wholeReversed = s.wholeReversed;
   state.bpm = s.bpm;
   state.bars = s.bars;
@@ -401,15 +412,17 @@ export function redo() {
 
 // ---- Actions ---------------------------------------------------------------
 
-export async function loadFile(file: File) {
+export async function loadFile(file: File): Promise<boolean> {
   initAudio();
   const ctx = engine.ensure();
   if (ctx.state === 'suspended') await ctx.resume();
   state.analyzing = true;
-  state.sampleName = file.name;
   try {
     const arr = await file.arrayBuffer();
     const buffer = await ctx.decodeAudioData(arr.slice(0));
+    // only mutate state once decoding succeeds, so a bad file/recording leaves
+    // the current sample and project untouched
+    state.sampleName = file.name;
     originalBuffer = buffer;
     samplePlayer!.load(buffer);
     const a = await analyzeAsync(buffer);
@@ -431,12 +444,169 @@ export async function loadFile(file: File) {
     state.hasSample = true;
     state.ready = true;
     toast(`Analyzed ${file.name}`);
+    return true;
   } catch (e) {
     toast('Could not decode that audio file');
     console.error(e);
+    return false;
   } finally {
     state.analyzing = false;
   }
+}
+
+// ---- Microphone recording --------------------------------------------------
+// Open decision: capture is capped at 30s (a practical sample length that won't
+// exhaust memory) and there is no mixer monitoring in this first release.
+export const MAX_REC_SECONDS = 30;
+let mediaRecorder: MediaRecorder | null = null;
+let mediaStream: MediaStream | null = null;
+let recChunks: Blob[] = [];
+let recCancelled = false;
+let recTimer: number | null = null;
+
+function stopTracks() {
+  mediaStream?.getTracks().forEach((t) => t.stop());
+  mediaStream = null;
+}
+function clearRecTimer() {
+  if (recTimer !== null) {
+    clearInterval(recTimer);
+    recTimer = null;
+  }
+}
+function pickRecMime(): string {
+  const types = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'];
+  for (const t of types) {
+    try {
+      if (MediaRecorder.isTypeSupported(t)) return t;
+    } catch {
+      /* ignore */
+    }
+  }
+  return '';
+}
+
+export async function startRecording() {
+  if (state.recStatus === 'recording' || state.recStatus === 'requesting') return;
+  state.recError = '';
+  if (
+    typeof MediaRecorder === 'undefined' ||
+    !navigator.mediaDevices?.getUserMedia
+  ) {
+    state.recStatus = 'error';
+    state.recError = 'Recording is not supported in this browser';
+    return;
+  }
+  state.recStatus = 'requesting';
+  let stream: MediaStream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch {
+    state.recStatus = 'error';
+    state.recError = 'Microphone access was denied or no device is available';
+    return;
+  }
+  try {
+    initAudio();
+    const ctx = engine.ensure();
+    if (ctx.state === 'suspended') await ctx.resume();
+    const mime = pickRecMime();
+    const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+    recChunks = [];
+    recCancelled = false;
+    mr.ondataavailable = (e) => {
+      if (e.data && e.data.size) recChunks.push(e.data);
+    };
+    mr.onstop = () => void finishRecording();
+    mr.onerror = () => {
+      clearRecTimer();
+      stopTracks();
+      state.recStatus = 'error';
+      state.recError = 'Recording failed';
+    };
+    mediaRecorder = mr;
+    mediaStream = stream;
+    mr.start();
+    state.recElapsed = 0;
+    state.recStatus = 'recording';
+    recTimer = window.setInterval(() => {
+      state.recElapsed = Math.min(MAX_REC_SECONDS, state.recElapsed + 0.1);
+      if (state.recElapsed >= MAX_REC_SECONDS) stopRecording();
+    }, 100);
+  } catch {
+    stopTracks();
+    state.recStatus = 'error';
+    state.recError = 'Could not start recording';
+  }
+}
+
+export function stopRecording() {
+  if (state.recStatus !== 'recording' || !mediaRecorder) return;
+  recCancelled = false;
+  clearRecTimer();
+  try {
+    mediaRecorder.stop(); // → onstop → finishRecording()
+  } catch {
+    /* ignore */
+  }
+  stopTracks();
+}
+
+export function cancelRecording() {
+  clearRecTimer();
+  if (state.recStatus === 'recording' && mediaRecorder) {
+    recCancelled = true;
+    try {
+      mediaRecorder.stop();
+    } catch {
+      /* ignore */
+    }
+  }
+  stopTracks();
+  state.recStatus = 'idle';
+  state.recElapsed = 0;
+}
+
+async function finishRecording() {
+  clearRecTimer();
+  const cancelled = recCancelled;
+  const chunks = recChunks;
+  const type = mediaRecorder?.mimeType || 'audio/webm';
+  mediaRecorder = null;
+  recChunks = [];
+  if (cancelled || !chunks.length) {
+    state.recStatus = 'idle';
+    state.recElapsed = 0;
+    return;
+  }
+  const blob = new Blob(chunks, { type });
+  const ext = type.includes('mp4') ? 'm4a' : type.includes('ogg') ? 'ogg' : 'webm';
+  const file = new File([blob], `recording-${Date.now()}.${ext}`, { type });
+  state.recStatus = 'idle';
+  const ok = await loadFile(file); // reuse the upload analysis path
+  if (!ok) {
+    state.recStatus = 'error';
+    state.recError = 'Could not decode the recording';
+  }
+}
+
+export function dismissRecError() {
+  if (state.recStatus === 'error') {
+    state.recStatus = 'idle';
+    state.recError = '';
+  }
+}
+
+/** Release the mic + timer (call on component teardown). */
+export function disposeRecording() {
+  clearRecTimer();
+  try {
+    mediaRecorder?.stop();
+  } catch {
+    /* ignore */
+  }
+  mediaRecorder = null;
+  stopTracks();
 }
 
 /** Build a default sample grid: each slice fires once, spread across the loop. */
@@ -765,6 +935,11 @@ export function setStretch(rate: number) {
   state.stretch = rate;
   applySampleParams();
 }
+/** Sample makeup gain (0–4×). History is managed by the caller (once per drag). */
+export function setSampleGain(v: number) {
+  state.sampleGain = Math.max(0, Math.min(4, v));
+  applySampleParams();
+}
 export function reverseSample() {
   pushHistory();
   state.wholeReversed = !state.wholeReversed;
@@ -775,6 +950,7 @@ function applySampleParams() {
   if (!samplePlayer) return;
   samplePlayer.pitch = state.pitch;
   samplePlayer.rate = state.stretch;
+  samplePlayer.gain = state.sampleGain;
   samplePlayer.wholeReversed = state.wholeReversed;
 }
 
@@ -978,6 +1154,7 @@ export async function exportWav() {
   offSample.load(samplePlayer.buffer);
   offSample.pitch = state.pitch;
   offSample.rate = state.stretch;
+  offSample.gain = state.sampleGain;
   offSample.wholeReversed = state.wholeReversed;
   const offSynth = new Synth(offline, offChans.bass.input);
   offSynth.setInstrument(state.instrument);
@@ -1041,6 +1218,7 @@ export async function saveProject() {
     autoChopCount: state.autoChopCount,
     pitch: state.pitch,
     stretch: state.stretch,
+    sampleGain: state.sampleGain,
     wholeReversed: state.wholeReversed,
     synthWave: state.synthWave,
     instrument: state.instrument,
@@ -1088,6 +1266,7 @@ export async function loadProject(file: File) {
     state.selectedSliceId = null;
     state.pitch = parsed.pitch;
     state.stretch = parsed.stretch;
+    state.sampleGain = parsed.sampleGain ?? 1;
     state.wholeReversed = parsed.wholeReversed;
     state.synthWave = parsed.synthWave;
     state.instrument = parsed.instrument ?? instrumentForWave(parsed.synthWave);

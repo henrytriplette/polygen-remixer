@@ -55,6 +55,7 @@ export interface ProjectFileV2 {
   channels: SavedChannel[];
   autoChopCount?: number; // optional: added after v2, older files still load
   instrument?: string; // optional: melody instrument id, older files fall back
+  sampleGain?: number; // optional: sample makeup gain, older files default to 1
 }
 
 const EFFECT_TYPES: readonly EffectType[] = [
@@ -87,6 +88,8 @@ export function isProjectFile(value: unknown): value is ProjectFileV2 {
     typeof value.wholeReversed !== 'boolean' ||
     typeof value.synthWave !== 'string' || !SYNTH_WAVES.includes(value.synthWave) ||
     (value.instrument !== undefined && typeof value.instrument !== 'string') ||
+    (value.sampleGain !== undefined &&
+      (!isNumber(value.sampleGain) || value.sampleGain < 0 || value.sampleGain > 4)) ||
     (value.autoChopCount !== undefined &&
       (!isNumber(value.autoChopCount) || value.autoChopCount < 2 || value.autoChopCount > 32)) ||
     !Array.isArray(value.drums) || !Array.isArray(value.notes) ||

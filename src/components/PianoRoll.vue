@@ -87,15 +87,16 @@ function onWheel(e: WheelEvent) {
   else zoomX(clamp((e.clientX - rect.left) / rect.width, 0, 1), factor);
 }
 
-// ---- Pointer: click to place/remove notes, drag empty space to pan --------
-let downX = 0;
-let downY = 0;
+// ---- Interaction mode -----------------------------------------------------
+// An explicit toggle removes the fragile tap-vs-drag guesswork on touch:
+//  · Draw = taps place / remove notes (default)
+//  · Pan  = single-finger drag pans the viewport
+// Pinch-to-zoom (2 fingers) and wheel-zoom work in both modes.
+const editMode = ref<'draw' | 'pan'>('draw');
+
 let lastX = 0;
 let lastY = 0;
-let downStep = 0;
-let downMidi = 0;
-let moved = false;
-let panning = false;
+let downActive = false;
 
 function cellAt(clientX: number, clientY: number) {
   const rect = gridEl.value!.getBoundingClientRect();
@@ -104,48 +105,44 @@ function cellAt(clientX: number, clientY: number) {
     midi: HIGH - Math.floor(yToRow(clientY - rect.top)),
   };
 }
+/** Place or remove a note at the given cell (no-op if outside the grid). */
+function toggleNoteAt(step: number, midi: number) {
+  if (step < 0 || step >= state.totalSteps || midi < LOW || midi > HIGH) return;
+  const existing = state.notes.find(
+    (n) => n.midi === midi && step >= n.start && step < n.start + n.length,
+  );
+  if (existing) removeNote(existing.id);
+  else addNote(midi, step, 2);
+}
 function gridDown(e: PointerEvent) {
   if (pinching) return;
-  downX = lastX = e.clientX;
-  downY = lastY = e.clientY;
-  moved = false;
-  panning = false;
-  const c = cellAt(e.clientX, e.clientY);
-  downStep = c.step;
-  downMidi = c.midi;
-  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  lastX = e.clientX;
+  lastY = e.clientY;
+  downActive = true;
+  // In Draw mode the note lands the instant you touch down — no pointerup, no
+  // movement threshold — so a tap can never be swallowed by finger jitter.
+  // Do this BEFORE setPointerCapture: if capture ever throws, note entry must
+  // still happen.
+  if (editMode.value === 'draw') {
+    const c = cellAt(e.clientX, e.clientY);
+    toggleNoteAt(c.step, c.midi);
+  }
+  try {
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  } catch {
+    /* no active pointer (e.g. synthetic events) — capture is best-effort */
+  }
 }
 function gridMove(e: PointerEvent) {
-  if (pinching || activePointers.size > 1) return;
-  if (!downX && !downY) return;
-  if (!moved && Math.hypot(e.clientX - downX, e.clientY - downY) > 4) {
-    moved = true;
-    panning = true;
-  }
-  if (panning) {
-    panSteps(-((e.clientX - lastX) / gridW.value) * stepSpan());
-    panRows(-((e.clientY - lastY) / gridH.value) * rowSpan());
-  }
+  if (pinching || activePointers.size > 1 || !downActive) return;
+  if (editMode.value !== 'pan') return; // in Draw mode a drag never pans
+  panSteps(-((e.clientX - lastX) / gridW.value) * stepSpan());
+  panRows(-((e.clientY - lastY) / gridH.value) * rowSpan());
   lastX = e.clientX;
   lastY = e.clientY;
 }
 function gridUp() {
-  if (!panning && !pinching) {
-    if (
-      downStep >= 0 &&
-      downStep < state.totalSteps &&
-      downMidi >= LOW &&
-      downMidi <= HIGH
-    ) {
-      const existing = state.notes.find(
-        (n) => n.midi === downMidi && downStep >= n.start && downStep < n.start + n.length,
-      );
-      if (existing) removeNote(existing.id);
-      else addNote(downMidi, downStep, 2);
-    }
-  }
-  downX = downY = 0;
-  panning = false;
+  downActive = false;
 }
 
 // ---- Pinch to zoom (two pointers), capture phase --------------------------
@@ -163,6 +160,15 @@ function dist() {
   return Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
 }
 function onPtrDown(e: PointerEvent) {
+  // A primary pointer marks the start of a fresh gesture. If a previous
+  // pointerup/pointercancel was ever missed (common on mobile when the browser
+  // steals a gesture), a stale entry would linger here and make the next single
+  // tap look like a 2-finger pinch — which would block note entry. Clearing on
+  // the primary pointer keeps the set honest.
+  if (e.isPrimary) {
+    activePointers.clear();
+    pinching = false;
+  }
   activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (activePointers.size === 2 && gridEl.value) {
     const rect = gridEl.value.getBoundingClientRect();
@@ -175,7 +181,7 @@ function onPtrDown(e: PointerEvent) {
     pinchStartR0 = vRow0.value;
     pinchSpanY0 = rowSpan();
     pinching = true;
-    panning = false;
+    downActive = false; // a second finger cancels any in-progress tap/pan
   }
 }
 function onPtrMove(e: PointerEvent) {
@@ -349,6 +355,26 @@ onUnmounted(() => {
     <div class="roll-head">
       <span class="label">Piano Roll · Bass / Melody</span>
       <div class="wave-select" role="group" aria-label="Melody instrument">
+        <div class="mode-toggle" role="group" aria-label="Piano roll interaction mode">
+          <button
+            class="btn small mode-btn"
+            :class="{ active: editMode === 'draw' }"
+            :aria-pressed="editMode === 'draw'"
+            title="Draw: tap to add notes"
+            @click="editMode = 'draw'"
+          >
+            ✎ Draw
+          </button>
+          <button
+            class="btn small mode-btn"
+            :class="{ active: editMode === 'pan' }"
+            :aria-pressed="editMode === 'pan'"
+            title="Pan: drag to move · pinch to zoom"
+            @click="editMode = 'pan'"
+          >
+            ✋ Pan
+          </button>
+        </div>
         <button
           v-for="inst in INSTRUMENTS"
           :key="inst.id"
@@ -413,8 +439,6 @@ onUnmounted(() => {
             top: noteTop(n.midi) + 'px',
             height: rowH() + 'px',
           }"
-          @pointerdown.stop
-          @click.stop="removeNote(n.id)"
         >
           <span v-if="noteWidth(n.length) > 24" class="note-name">{{ midiToName(n.midi) }}</span>
         </div>
@@ -446,6 +470,27 @@ onUnmounted(() => {
 .roll-clear:hover:not(:disabled) {
   color: var(--red);
   border-color: var(--red);
+}
+/* segmented Draw / Pan interaction-mode toggle */
+.mode-toggle {
+  display: inline-flex;
+  gap: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.mode-btn {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+.mode-btn + .mode-btn {
+  border-left: 1px solid var(--line-strong);
+}
+.mode-btn.active {
+  background: var(--green);
+  border-color: var(--green);
+  color: #000;
 }
 .roll-grid {
   flex: 1;

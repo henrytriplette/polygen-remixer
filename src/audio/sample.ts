@@ -155,6 +155,7 @@ export class SamplePlayer {
   reversed: AudioBuffer | null = null;
   rate = 1; // time-stretch / speed
   pitch = 0; // global semitones
+  gain = 1; // makeup gain (allows boosting quiet samples above unity)
   wholeReversed = false;
 
   constructor(private ctx: BaseAudioContext, private dest: AudioNode) {}
@@ -183,7 +184,7 @@ export class SamplePlayer {
     src.playbackRate.value = this.rate;
     src.detune.value = (this.pitch + semis) * 100;
     const g = this.ctx.createGain();
-    g.gain.value = gain;
+    g.gain.value = gain * this.gain;
     src.connect(g);
     g.connect(this.dest);
     src.start(when, offset, duration);
