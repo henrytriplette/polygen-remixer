@@ -234,6 +234,12 @@ function initAudio() {
   samplePlayer = new SamplePlayer(ctx, channels.sample.input);
   bassSynth = new Synth(ctx, channels.bass.input);
 
+  // transport length/tempo live in the store; make sure the engine agrees
+  // before the first play (otherwise it loops over its own default length).
+  engine.bars = state.bars;
+  engine.bpm = state.bpm;
+  engine.loop = state.loop;
+
   engine.onStep((step, time) => scheduleStep(step, time));
   engine.onVisualStep = (s) => (state.currentStep = s);
 }

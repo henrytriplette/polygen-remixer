@@ -15,7 +15,7 @@ class AudioEngine {
   // Transport
   bpm = 120;
   stepsPerBar = 16; // 16th-note resolution
-  bars = 8;
+  bars = 2; // kept in sync with state.bars by the store
   isPlaying = false;
   loop = true;
   private currentStep = 0;

@@ -417,6 +417,13 @@ function knobUp() {
   border-radius: var(--radius-sm);
   overflow: hidden;
 }
+/* Out of flow: draw() sizes the canvas from the box, so an in-flow canvas
+   would feed its own height back into the box and grow every frame. */
+.wave canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
 .empty {
   position: absolute;
   inset: 0;
