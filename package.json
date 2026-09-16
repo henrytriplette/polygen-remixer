@@ -17,6 +17,7 @@
     "build:electron": "vite build --config ./config/vite.config.electron.ts --mode production",
     "electron:start": "yarn build:electron && electron .",
     "electron:icon": "electron build/make-icon.cjs",
+    "gumroad:images": "electron build/make-gumroad.cjs",
     "dist:win": "yarn build:electron && electron-builder --win portable"
   },
   "dependencies": {
