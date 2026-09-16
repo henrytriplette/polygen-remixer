@@ -38,6 +38,21 @@ click **Upload sample**) to begin. Press <kbd>Space</kbd> to play.
 Other scripts: `yarn build` (type-check + production bundle into `dist/`),
 `yarn build:dev`, `yarn preview`.
 
+### Desktop (Windows, portable)
+
+The same app ships as a single portable Windows executable — no installer,
+nothing written to the registry, just run the `.exe`:
+
+```bash
+yarn dist:win
+```
+
+This builds the renderer with a relative base (`config/vite.config.electron.ts`),
+wraps it with Electron (`electron/main.cjs`) and writes
+`release/RemixStudio-<version>-portable.exe`. `yarn electron:start` runs the
+unpackaged desktop build for a quick check, and `yarn electron:icon`
+regenerates `build/icon.png` from `docs/logo.svg`.
+
 ## Tour
 
 <table>
